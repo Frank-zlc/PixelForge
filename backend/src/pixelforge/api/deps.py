@@ -12,6 +12,7 @@ from pixelforge.device.lease import Lease, LeaseManager
 from pixelforge.device.manager import SessionManager
 from pixelforge.device.registry import DeviceRegistry
 from pixelforge.device.session import DeviceSession
+from pixelforge.listeners.manager import ListenerManager
 from pixelforge.store.projects import ProjectStore
 from pixelforge.timeline.bus import TimelineBus
 
@@ -19,6 +20,7 @@ __all__ = [
     "AdbDep",
     "BusDep",
     "LeasesDep",
+    "ListenersDep",
     "RegistryDep",
     "SessionsDep",
     "SettingsDep",
@@ -51,6 +53,10 @@ def get_sessions(request: Request) -> SessionManager:
     return _state(request, "sessions")  # type: ignore[return-value]
 
 
+def get_listeners(request: Request) -> ListenerManager:
+    return _state(request, "listeners")  # type: ignore[return-value]
+
+
 def get_store(request: Request) -> ProjectStore:
     return _state(request, "store")  # type: ignore[return-value]
 
@@ -67,6 +73,7 @@ RegistryDep = Annotated[DeviceRegistry, Depends(get_registry)]
 LeasesDep = Annotated[LeaseManager, Depends(get_leases)]
 AdbDep = Annotated[AdbClient, Depends(get_adb)]
 SessionsDep = Annotated[SessionManager, Depends(get_sessions)]
+ListenersDep = Annotated[ListenerManager, Depends(get_listeners)]
 StoreDep = Annotated[ProjectStore, Depends(get_store)]
 BusDep = Annotated[TimelineBus, Depends(get_bus)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]

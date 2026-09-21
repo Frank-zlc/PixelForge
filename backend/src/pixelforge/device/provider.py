@@ -19,10 +19,10 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
-from pixelforge.adb.client import AdbClient, AdbError
+from pixelforge.adb.client import AdbClient, AdbError, DeviceProps
 from pixelforge.adb.track import (
     ADB_OKAY,
     AdbProtocolError,
@@ -48,7 +48,7 @@ _RECONNECT_MIN_S = 0.5
 _RECONNECT_MAX_S = 10.0
 
 
-class DeviceEventKind(str, Enum):
+class DeviceEventKind(StrEnum):
     ADDED = "added"
     REMOVED = "removed"
     STATE_CHANGED = "state_changed"
@@ -92,6 +92,26 @@ class DeviceProvider(Protocol):
         """
         ...
 
+    async def properties(self, serial: str) -> DeviceProps:
+        """Return enough display/device metadata to open a session."""
+        ...
+
+    async def acquire(self, serial: str, *, ttl_s: float) -> str:
+        """Reserve the device and return its adb-reachable serial."""
+        ...
+
+    async def renew(self, serial: str, *, ttl_s: float) -> None:
+        """Keep an external reservation alive, if the provider has one."""
+        ...
+
+    async def release(self, serial: str) -> None:
+        """Release any provider-side reservation and remote adb tunnel."""
+        ...
+
+    async def close(self) -> None:
+        """Close provider resources."""
+        ...
+
 
 class LocalAdbProvider:
     """Devices attached to this machine's adb server."""
@@ -112,6 +132,22 @@ class LocalAdbProvider:
 
     async def adb_endpoint(self, serial: str) -> str:
         return serial
+
+    async def properties(self, serial: str) -> DeviceProps:
+        return await self._adb.props(serial)
+
+    async def acquire(self, serial: str, *, ttl_s: float) -> str:
+        _ = ttl_s
+        return serial
+
+    async def renew(self, serial: str, *, ttl_s: float) -> None:
+        _ = (serial, ttl_s)
+
+    async def release(self, serial: str) -> None:
+        _ = serial
+
+    async def close(self) -> None:
+        pass
 
     async def watch(
         self, known: dict[str, DeviceState] | None = None

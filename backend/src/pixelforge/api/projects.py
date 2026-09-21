@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from pixelforge.api.deps import StoreDep
+from pixelforge.api.deps import SettingsDep, StoreDep
 from pixelforge.exporters.registry import export as run_export
 from pixelforge.exporters.registry import list_exporters
 from pixelforge.listeners.registry import available_listeners
@@ -26,6 +26,26 @@ async def exporters() -> list[dict[str, str]]:
 @router.get("/listeners")
 async def listeners() -> list[dict[str, str]]:
     return available_listeners()
+
+
+@router.get("/storage")
+async def storage(
+    settings: SettingsDep,
+    store: StoreDep,
+    project_id: str | None = None,
+) -> dict[str, str | None]:
+    """Report real save locations without exposing any secret configuration."""
+    project_templates = None
+    if project_id:
+        try:
+            store.get(project_id)
+            project_templates = str(store.templates_dir(project_id).resolve())
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return {
+        "asset_root": str(settings.assets_dir.resolve()),
+        "project_templates": project_templates,
+    }
 
 
 @router.get("/projects", response_model=list[Project])

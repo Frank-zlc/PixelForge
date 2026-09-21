@@ -8,7 +8,9 @@ the device silently ignoring malformed input.
 
 from __future__ import annotations
 
+import asyncio
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -26,12 +28,14 @@ from pixelforge.device.scrcpy.control import (
     encode_text,
     encode_touch,
 )
+from pixelforge.device.scrcpy.session import ScrcpyConfig, ScrcpySession
 from pixelforge.device.scrcpy.video import (
     DEVICE_NAME_LEN,
     PACKET_FLAG_CONFIG,
     PACKET_FLAG_KEY_FRAME,
     Codec,
     NalType,
+    VideoPacket,
     VideoStreamParser,
     iter_nal_units,
     looks_like_keyframe,
@@ -321,6 +325,107 @@ class TestVideoParser:
     def test_webcodecs_identifiers(self) -> None:
         assert Codec.H264.webcodecs_id.startswith("avc1.")
         assert Codec.H265.webcodecs_id.startswith("hev1.")
+
+
+async def test_live_subscriber_is_hashable_and_receives_packets() -> None:
+    """Regression: the WebSocket used to fail before yielding its first frame."""
+    session = ScrcpySession(None, "DEVICE")  # type: ignore[arg-type]
+    packet = VideoPacket(data=b"frame", pts_us=1, is_config=False, is_keyframe=True)
+    async with session.subscribe() as packets:
+        assert session.state.subscribers == 1
+        session._fan_out(packet)
+        assert await anext(packets) is packet
+    assert session.state.subscribers == 0
+
+
+async def test_scrcpy_start_retries_an_empty_handshake(monkeypatch, tmp_path: Path) -> None:
+    jar = tmp_path / "scrcpy-server.jar"
+    jar.write_bytes(b"jar")
+    calls: list[str] = []
+
+    class Adb:
+        async def push(self, *_args) -> None:
+            calls.append("push")
+
+        async def forward(self, _serial, _local, remote) -> str:
+            calls.append("forward")
+            assert remote.startswith("localabstract:scrcpy_")
+            return "12345"
+
+        async def forward_remove(self, *_args) -> None:
+            calls.append("remove")
+
+    session = ScrcpySession(Adb(), "DEVICE", config=ScrcpyConfig(jar_path=jar))  # type: ignore[arg-type]
+    handshakes = 0
+
+    async def launch(scid: int) -> None:
+        calls.append("launch")
+        assert 0 <= scid < 0x7FFF_FFFF
+
+    async def connect() -> None:
+        nonlocal handshakes
+        handshakes += 1
+        if handshakes == 1:
+            raise asyncio.IncompleteReadError(b"", 1)
+
+    async def relay() -> None:
+        await asyncio.Event().wait()
+
+    async def metadata() -> None:
+        return None
+
+    monkeypatch.setattr(session, "_launch", launch)
+    monkeypatch.setattr(session, "_connect_sockets", connect)
+    monkeypatch.setattr(session, "_relay_loop", relay)
+    monkeypatch.setattr(session, "_await_metadata", metadata)
+
+    await session.start()
+    try:
+        assert session.state.started
+        assert handshakes == 2
+        assert calls.count("remove") == 1
+        assert calls[:3] == ["push", "forward", "launch"]
+    finally:
+        await session.stop()
+
+
+def test_scrcpy_scid_is_passed_as_eight_digit_hex() -> None:
+    args = ScrcpyConfig().server_args(scid=0x1234ABCD)
+    assert args[0] == "scid=1234abcd"
+
+
+async def test_forwarded_empty_handshake_is_retried(monkeypatch) -> None:
+    class Adb:
+        server_host = "127.0.0.1"
+
+    class Writer:
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    calls = 0
+
+    async def open_connection(_host, _port):
+        nonlocal calls
+        calls += 1
+        reader = asyncio.StreamReader()
+        if calls == 1:
+            reader.feed_eof()
+        elif calls == 2:
+            reader.feed_data(b"\x00")
+        return reader, Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    session = ScrcpySession(
+        Adb(),  # type: ignore[arg-type]
+        "DEVICE",
+        config=ScrcpyConfig(connect_timeout_s=1),
+    )
+    session._forward_port = "12345"
+    await session._connect_sockets()
+    assert calls == 3  # empty video, valid video, then control
 
 
 class TestAnnexB:

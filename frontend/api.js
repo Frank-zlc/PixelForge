@@ -24,9 +24,39 @@ async function request(method, path, body) {
   return payload;
 }
 
+async function requestImage(method, path, body) {
+  const response = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let detail = text || `${response.status}`;
+    try {
+      const payload = JSON.parse(text);
+      detail = payload.detail || payload.message || detail;
+    } catch {
+      /* The server may return plain text for an unexpected failure. */
+    }
+    const error = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    error.status = response.status;
+    throw error;
+  }
+  const blob = await response.blob();
+  return {
+    blob,
+    width: Number(response.headers.get('X-PixelForge-Width')) || 0,
+    height: Number(response.headers.get('X-PixelForge-Height')) || 0,
+    lossless: response.headers.get('X-PixelForge-Lossless') === '1',
+  };
+}
+
 export const api = {
   health: () => request('GET', '/api/health'),
   devices: () => request('GET', '/api/devices'),
+  storage: (projectId) =>
+    request('GET', `/api/storage${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),
 
   openSession: (serial, owner, projectId) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/session`, {
@@ -47,6 +77,15 @@ export const api = {
     request('DELETE', `/api/devices/${encodeURIComponent(serial)}/session`, { token }),
   sessionStatus: (serial) =>
     request('GET', `/api/devices/${encodeURIComponent(serial)}/session/status`),
+  listenerStatus: (serial) =>
+    request('GET', `/api/devices/${encodeURIComponent(serial)}/listeners`),
+  startListeners: (serial, token, projectId) =>
+    request('POST', `/api/devices/${encodeURIComponent(serial)}/listeners/start`, {
+      token,
+      project_id: projectId,
+    }),
+  stopListeners: (serial, token) =>
+    request('POST', `/api/devices/${encodeURIComponent(serial)}/listeners/stop`, { token }),
 
   connectWireless: (address) => request('POST', '/api/devices/connect', { address }),
   disconnectWireless: (address) => request('POST', '/api/devices/disconnect', { address }),
@@ -55,6 +94,8 @@ export const api = {
 
   point: (serial, body) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/point`, body),
+  capture: (serial, token, fresh = true) =>
+    requestImage('POST', `/api/devices/${encodeURIComponent(serial)}/capture`, { token, fresh }),
   crop: (serial, body) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/crop`, body),
   hierarchy: (serial, token) =>
@@ -64,6 +105,8 @@ export const api = {
 
   tap: (serial, body) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/tap`, body),
+  swipe: (serial, body) =>
+    request('POST', `/api/devices/${encodeURIComponent(serial)}/swipe`, body),
   key: (serial, token, keycode) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/key`, { token, keycode }),
   text: (serial, token, text) =>
@@ -115,7 +158,9 @@ export function openSocket(path, { onJson, onOpen, onClose } = {}) {
   connect();
   return {
     send: (payload) => {
-      if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(payload));
+      return true;
     },
     close: () => {
       closed = true;

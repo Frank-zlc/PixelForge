@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from pixelforge.adb.client import AdbClient
+from pixelforge.api.devices import TcpipRequest, enable_tcpip
 
 
 @pytest.fixture
@@ -75,3 +76,24 @@ class TestConfiguration:
 
     def test_env_points_children_at_our_server(self, adb: AdbClient) -> None:
         assert adb.env["ADB_SERVER_SOCKET"] == "tcp:127.0.0.1:5038"
+
+
+async def test_tcpip_reads_phone_ip_before_restarting_adbd() -> None:
+    calls: list[str] = []
+
+    class Registry:
+        def get(self, serial: str):
+            return object() if serial == "USB123" else None
+
+    class Adb:
+        async def device_ip(self, serial: str) -> str:
+            calls.append(f"ip:{serial}")
+            return "192.168.2.3"
+
+        async def tcpip(self, serial: str, port: int) -> str:
+            calls.append(f"tcpip:{serial}:{port}")
+            return "restarting in TCP mode"
+
+    result = await enable_tcpip("USB123", TcpipRequest(), Registry(), Adb())
+    assert calls == ["ip:USB123", "tcpip:USB123:5555"]
+    assert result["suggested_address"] == "192.168.2.3:5555"

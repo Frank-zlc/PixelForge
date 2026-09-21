@@ -7,8 +7,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from pixelforge.api.capture import _asset_output_path
 from pixelforge.config import Settings
 from pixelforge.main import build_app
 from pixelforge.store.projects import ProjectStore
@@ -56,6 +58,16 @@ class TestProjectStore:
         assert path.name == "pay.png"
         assert [t["name"] for t in store.list_templates("shop")] == ["pay"]
 
+    def test_template_cannot_create_an_orphan_project(self, store: ProjectStore) -> None:
+        with pytest.raises(KeyError, match="unknown project"):
+            store.save_template("missing", "pay", b"png")
+
+    def test_standalone_asset_folder_stays_below_configured_root(self, tmp_path: Path) -> None:
+        path = _asset_output_path(tmp_path / "assets", "albion/items", "hide")
+        assert path == (tmp_path / "assets/albion/items/hide.png").resolve()
+        with pytest.raises(HTTPException, match="relative path"):
+            _asset_output_path(tmp_path / "assets", "../outside", "hide")
+
     def test_writes_are_atomic(self, store: ProjectStore) -> None:
         # A temp file plus rename means an interrupted save cannot leave a
         # truncated script behind.
@@ -92,6 +104,13 @@ class TestApi:
 
     def test_device_list_is_empty_not_an_error(self, client) -> None:
         assert client.get("/api/devices").json() == []
+
+    def test_storage_reports_the_real_asset_directory(self, client, tmp_path: Path) -> None:
+        payload = client.get("/api/storage").json()
+        assert payload == {
+            "asset_root": str((tmp_path / "assets").resolve()),
+            "project_templates": None,
+        }
 
     def test_unknown_device(self, client) -> None:
         assert client.get("/api/devices/NOPE").status_code == 404
@@ -160,6 +179,9 @@ class TestApi:
         # Exclusivity is not advisory: without it two operators interleave taps.
         for path, body in [
             ("/api/devices/X/tap", {"token": "t", "x": 1, "y": 1}),
+            ("/api/devices/X/swipe", {
+                "token": "t", "x1": 1, "y1": 1, "x2": 2, "y2": 2,
+            }),
             ("/api/devices/X/key", {"token": "t", "keycode": 4}),
             ("/api/devices/X/text", {"token": "t", "text": "hi"}),
         ]:

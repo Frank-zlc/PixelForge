@@ -23,16 +23,22 @@ const state = {
   nodes: [],
   lastPoint: null, // describe() output for the last click
   lastNode: null, // accessibility node under the last click, if any
-  selection: null, // {x,y,width,height} in CSS space
+  selection: null, // {x,y,width,height} in DEVICE pixels (survives resize)
   project: null,
   script: null,
   runId: null,
   heartbeat: null,
+  lastCapture: null,
+  listeners: [],
+  controlSocket: null,
+  controlReady: false,
+  storage: null,
 };
 
 const player = new Player($('screen'), onPlayerStatus);
 const overlay = $('overlay');
 const overlayContext = overlay.getContext('2d');
+let tapFeedback = null;
 
 // ---------------------------------------------------------------- devices
 
@@ -84,7 +90,11 @@ function selectDevice(serial) {
   $('connect').disabled = !ready;
   // A serial that already looks like host:port is wireless; switching it again
   // would be a no-op at best.
-  $('wireless-tcpip').disabled = !ready || /:\d+$/.test(serial);
+  $('wireless-tcpip').disabled = !ready || /:\d+$/.test(serial) || Boolean(state.session);
+  if (ready && !/:\d+$/.test(serial) && !$('wireless-address').value.trim()) {
+    $('wireless-result').innerHTML =
+      '<div class="muted">USB 已连接。要改用无线，请点“开启 5555 并自动连接”。</div>';
+  }
 }
 
 // ---------------------------------------------------------------- session
@@ -103,19 +113,30 @@ async function connect(force = false) {
     return;
   }
   const session = state.session;
+  state.listeners = session.listeners || [];
   state.display = session.display ? { width: session.display[0], height: session.display[1] } : null;
   state.frame = session.frame ? { width: session.frame[0], height: session.frame[1] } : state.display;
 
   $('stage-empty').hidden = true;
   setSessionControlsEnabled(true);
+  renderListenerStatus();
   renderCapabilities();
+  connectControl(serial, session);
 
   if (session.capabilities.video) {
     await player.connect(serial);
+    // Do not leave the authoring canvas black when the first keyframe is late
+    // or the browser advertises WebCodecs but cannot decode this stream.
+    setTimeout(() => {
+      if (state.session === session && player.decoded === 0) {
+        refreshScreenshot({ quiet: true });
+      }
+    }, 1200);
   } else {
     // No video does not mean no session: screenshots and the accessibility tree
-    // still work, so fall back to a still image rather than an empty pane.
+    // still work, so immediately fall back to a lossless still image.
     onPlayerStatus({ state: 'novideo', detail: session.notes.join(' / ') });
+    await refreshScreenshot({ quiet: false });
   }
   startHeartbeat(serial);
   if (session.capabilities.a11y) loadHierarchy();
@@ -133,6 +154,8 @@ function startHeartbeat(serial) {
     try {
       const renewed = await api.renewSession(serial, state.session.token);
       state.session = { ...state.session, ...renewed };
+      state.listeners = renewed.listeners || state.listeners;
+      renderListenerStatus();
     } catch (error) {
       stopHeartbeat();
       const reason =
@@ -164,25 +187,80 @@ async function release() {
 
 function teardown() {
   stopHeartbeat();
+  closeControl();
   player.close();
   state.session = null;
   state.nodes = [];
   state.selection = null;
   state.lastPoint = null;
+  state.lastCapture = null;
+  state.listeners = [];
   setSessionControlsEnabled(false);
   $('stage-empty').hidden = false;
   $('session-state').textContent = '未连接';
   $('session-state').className = 'pill';
   $('stage-banner').hidden = true;
   clearOverlay();
+  syncSelectionEditor();
+  renderListenerStatus();
+}
+
+function closeControl() {
+  if (state.controlReady && dragViaControl && dragCurrent) {
+    sendLiveTouch('up', dragCurrent);
+  }
+  state.controlReady = false;
+  state.controlSocket?.close();
+  state.controlSocket = null;
+}
+
+function connectControl(serial, session) {
+  closeControl();
+  if (!session.capabilities.control || !session.capabilities.video) return;
+
+  // The live channel mirrors a real finger (DOWN/MOVE/UP). REST remains the
+  // fallback for ADB-only sessions and for the brief authentication window.
+  const token = session.token;
+  let control = null;
+  control = openSocket(`/ws/control/${encodeURIComponent(serial)}`, {
+    onOpen: (socket) => socket.send(JSON.stringify({ token })),
+    onJson: (message) => {
+      if (state.session?.token !== token || state.controlSocket !== control) return;
+      if (message.type === 'ready') state.controlReady = true;
+      if (message.type === 'error') {
+        state.controlReady = false;
+        toast(`实时控制不可用：${message.message}`);
+      }
+    },
+    onClose: () => {
+      if (state.session?.token === token && state.controlSocket === control) {
+        state.controlReady = false;
+      }
+    },
+  });
+  state.controlSocket = control;
 }
 
 function setSessionControlsEnabled(enabled) {
-  for (const id of ['release', 'key-back', 'key-home', 'diagnose', 'load-hierarchy', 'save-template', 'add-tap-step']) {
-    $(id).disabled = !enabled;
+  const caps = enabled ? state.session?.capabilities || {} : {};
+  $('release').disabled = !enabled;
+  for (const id of ['capture-screen', 'save-screen', 'copy-screen', 'diagnose']) {
+    $(id).disabled = !enabled || !caps.screenshot;
   }
+  for (const id of ['key-back', 'key-home', 'send-text', 'device-text']) {
+    $(id).disabled = !enabled || !caps.control;
+  }
+  $('mode-tap').disabled = !enabled || !caps.control;
+  $('mode-select').disabled = !enabled || !caps.screenshot;
+  $('load-hierarchy').disabled = !enabled || !caps.a11y;
+  syncStoragePanel();
+  $('add-tap-step').disabled = !enabled || !state.script || !state.lastPoint;
+  $('start-listeners').disabled = !enabled || !state.project;
+  $('stop-listeners').disabled = !enabled;
   $('connect').disabled = enabled;
   $('run-script').disabled = !enabled || !state.script;
+  const selectedIsUsb = Boolean(state.selected) && !/:\d+$/.test(state.selected);
+  $('wireless-tcpip').disabled = enabled || !selectedIsUsb;
 }
 
 function renderCapabilities() {
@@ -201,6 +279,48 @@ function renderCapabilities() {
   }
 }
 
+function renderListenerStatus() {
+  const host = $('listener-status');
+  if (!state.session) {
+    host.innerHTML = '<div class="muted">获取设备后按项目配置自动启动</div>';
+    return;
+  }
+  if (!state.listeners.length) {
+    host.innerHTML = '<div class="muted">当前没有运行中的监听器</div>';
+    return;
+  }
+  host.innerHTML = state.listeners.map((item) => {
+    const stateText = item.running ? '运行中' : item.error ? '启动失败' : '已停止';
+    const detail = item.error ? ` · ${item.error}` : '';
+    return `<div><span>${escapeHtml(item.name)}</span><span class="${item.error ? 'note' : ''}">${escapeHtml(stateText + detail)}</span></div>`;
+  }).join('');
+}
+
+$('start-listeners').onclick = async () => {
+  if (!state.session || !state.project) return;
+  try {
+    state.listeners = await api.startListeners(
+      state.selected,
+      state.session.token,
+      state.project.id,
+    );
+    renderListenerStatus();
+  } catch (error) {
+    toast(`启动监听失败：${error.message}`);
+  }
+};
+
+$('stop-listeners').onclick = async () => {
+  if (!state.session) return;
+  try {
+    await api.stopListeners(state.selected, state.session.token);
+    state.listeners = [];
+    renderListenerStatus();
+  } catch (error) {
+    toast(`停止监听失败：${error.message}`);
+  }
+};
+
 function onPlayerStatus(status) {
   const element = $('session-state');
   if (status.state === 'playing') {
@@ -215,9 +335,82 @@ function onPlayerStatus(status) {
     element.textContent = status.state === 'novideo' ? '无视频' : '视频错误';
     element.className = 'pill pill--warn';
     if (status.detail) showBanner(status.detail);
+    if (state.session && player.decoded === 0) refreshScreenshot({ quiet: true });
+  } else if (status.state === 'closed' && state.session) {
+    element.textContent = '视频已断开 · 静态截图';
+    element.className = 'pill pill--warn';
+    refreshScreenshot({ quiet: true });
   }
   syncOverlaySize();
 }
+
+// ---------------------------------------------------------------- screenshots
+
+async function fetchScreenshot() {
+  if (!state.session || !state.selected) throw new Error('请先获取设备');
+  const capture = await api.capture(state.selected, state.session.token, true);
+  state.lastCapture = capture;
+  return capture;
+}
+
+async function drawScreenshot(capture) {
+  const bitmap = await createImageBitmap(capture.blob);
+  const width = capture.width || bitmap.width;
+  const height = capture.height || bitmap.height;
+  const canvas = $('screen');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d', { alpha: false }).drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  state.frame = { width, height };
+  state.display = { width, height };
+  $('stage-empty').hidden = true;
+  const element = $('session-state');
+  element.textContent = `静态截图 ${width}×${height}`;
+  element.className = 'pill pill--ok';
+  syncOverlaySize();
+  drawOverlay(null);
+}
+
+async function refreshScreenshot({ quiet = false } = {}) {
+  try {
+    const capture = await fetchScreenshot();
+    await drawScreenshot(capture);
+    return capture;
+  } catch (error) {
+    if (!quiet) toast(`获取截图失败：${error.message}`);
+    return null;
+  }
+}
+
+function refreshAfterControl() {
+  if (state.session && !state.session.capabilities.video) {
+    setTimeout(() => refreshScreenshot({ quiet: true }), 250);
+  }
+}
+
+$('capture-screen').onclick = () => refreshScreenshot();
+
+$('save-screen').onclick = async () => {
+  const capture = await refreshScreenshot();
+  if (!capture) return;
+  const url = URL.createObjectURL(capture.blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `pixelforge-${state.selected}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+$('copy-screen').onclick = async () => {
+  try {
+    const capture = await fetchScreenshot();
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': capture.blob })]);
+    toast('原图已复制到剪贴板');
+  } catch (error) {
+    toast(`复制原图失败：${error.message}`);
+  }
+};
 
 // ---------------------------------------------------------------- overlay
 
@@ -233,9 +426,17 @@ function syncOverlaySize() {
   overlay.dataset.height = String(box.height);
 }
 
-function canvasPoint(event) {
+function canvasPoint(event, { clamp = false } = {}) {
   const box = $('screen').getBoundingClientRect();
-  return { x: event.clientX - box.left, y: event.clientY - box.top };
+  let x = event.clientX - box.left;
+  let y = event.clientY - box.top;
+  const inside = x >= 0 && y >= 0 && x <= box.width && y <= box.height;
+  if (!inside && !clamp) return null;
+  if (clamp) {
+    x = Math.min(Math.max(x, 0), box.width);
+    y = Math.min(Math.max(y, 0), box.height);
+  }
+  return { x, y };
 }
 
 function canvasSize() {
@@ -262,10 +463,36 @@ function drawOverlay(cursor) {
     overlayContext.lineTo(left + Number(overlay.dataset.width || 0), top + cursor.y);
     overlayContext.stroke();
   }
+  if (dragStart && dragCurrent && $('mode-tap').checked) {
+    const startX = left + dragStart.x;
+    const startY = top + dragStart.y;
+    const endX = left + dragCurrent.x;
+    const endY = top + dragCurrent.y;
+    overlayContext.strokeStyle = '#4ade80';
+    overlayContext.fillStyle = '#4ade80';
+    overlayContext.lineWidth = 3;
+    overlayContext.beginPath();
+    overlayContext.arc(startX, startY, 8, 0, Math.PI * 2);
+    overlayContext.moveTo(startX, startY);
+    overlayContext.lineTo(endX, endY);
+    overlayContext.stroke();
+    overlayContext.beginPath();
+    overlayContext.arc(endX, endY, 5, 0, Math.PI * 2);
+    overlayContext.fill();
+  }
+  if (tapFeedback) {
+    overlayContext.strokeStyle = '#4ade80';
+    overlayContext.lineWidth = 3;
+    overlayContext.beginPath();
+    overlayContext.arc(left + tapFeedback.x, top + tapFeedback.y, 12, 0, Math.PI * 2);
+    overlayContext.stroke();
+  }
   if (state.selection) {
-    const s = state.selection;
+    const s = geo.deviceRectToCss(state.selection, canvasSize(), state.frame, state.display);
     overlayContext.strokeStyle = '#fbbf24';
+    overlayContext.fillStyle = 'rgba(251,191,36,.10)';
     overlayContext.setLineDash([4, 3]);
+    overlayContext.fillRect(left + s.x, top + s.y, s.width, s.height);
     overlayContext.strokeRect(left + s.x, top + s.y, s.width, s.height);
     overlayContext.setLineDash([]);
   }
@@ -291,15 +518,111 @@ function drawOverlay(cursor) {
 // ---------------------------------------------------------------- pointer
 
 let dragStart = null;
+let activePointer = null;
+let dragCurrent = null;
+let dragStartedAt = 0;
+let dragViaControl = false;
+let lastMoveSentAt = 0;
 
 function pointerContext() {
   const element = canvasSize();
   return { element, frame: state.frame, display: state.display };
 }
 
-$('screen').addEventListener('mousemove', (event) => {
+const selectionInputs = [
+  ['selection-x', 'x'],
+  ['selection-y', 'y'],
+  ['selection-width', 'width'],
+  ['selection-height', 'height'],
+];
+
+function syncSelectionEditor() {
+  const selection = state.selection;
+  for (const [id, key] of selectionInputs) {
+    $(id).disabled = !selection;
+    $(id).value = selection ? String(selection[key]) : '';
+  }
+  $('apply-selection').disabled = !selection;
+  $('clear-selection').disabled = !selection;
+  $('selection-space').textContent = selection
+    ? `设备像素：${selection.x},${selection.y} · ${selection.width}×${selection.height}`
+    : '设备像素：未框选';
+  syncStoragePanel();
+}
+
+function setSelectionFromCss(rect, { render = true } = {}) {
+  if (!state.frame || !state.display) return;
+  const selection = geo.cssRectToDevice(
+    rect,
+    canvasSize(),
+    state.frame,
+    state.display,
+  );
+  if (!selection) return;
+  state.selection = selection;
+  syncSelectionEditor();
+  if (render) drawOverlay(null);
+}
+
+function applySelectionInputs() {
+  if (!state.display) return;
+  const values = Object.fromEntries(selectionInputs.map(([id, key]) => [key, Number($(id).value)]));
+  if (!Object.values(values).every(Number.isFinite) || values.width < 1 || values.height < 1) {
+    toast('框选参数必须是有效数字，宽和高至少为 1');
+    return;
+  }
+  const x = Math.max(0, Math.min(Math.round(values.x), state.display.width - 1));
+  const y = Math.max(0, Math.min(Math.round(values.y), state.display.height - 1));
+  const right = Math.min(state.display.width, x + Math.round(values.width));
+  const bottom = Math.min(state.display.height, y + Math.round(values.height));
+  state.selection = { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+  syncSelectionEditor();
+  drawOverlay(null);
+}
+
+$('apply-selection').onclick = applySelectionInputs;
+$('clear-selection').onclick = () => {
+  state.selection = null;
+  syncSelectionEditor();
+  drawOverlay(null);
+};
+for (const [id] of selectionInputs) {
+  $(id).addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') applySelectionInputs();
+  });
+}
+
+const stageBody = document.querySelector('.stage-body');
+
+function sendLiveTouch(type, point) {
+  if (!state.controlReady || !state.controlSocket || !state.frame) return false;
+  const framePoint = geo.cssToFrame(point, canvasSize(), state.frame);
+  if (!framePoint) return false;
+  return state.controlSocket.send({
+    type,
+    x: framePoint.x,
+    y: framePoint.y,
+    pointer: -2,
+  });
+}
+
+function cancelPointerGesture() {
+  if (dragViaControl && dragCurrent) sendLiveTouch('up', dragCurrent);
+  dragStart = null;
+  dragCurrent = null;
+  dragViaControl = false;
+  activePointer = null;
+  drawOverlay(null);
+}
+
+stageBody.addEventListener('pointermove', (event) => {
   if (!state.session || !state.frame || !state.display) return;
-  const point = canvasPoint(event);
+  const point = canvasPoint(event, { clamp: dragStart !== null });
+  if (!point) {
+    $('readout').hidden = true;
+    drawOverlay(null);
+    return;
+  }
   const { element, frame, display } = pointerContext();
   const described = geo.describe(point, element, frame, display);
   const readout = $('readout');
@@ -317,36 +640,103 @@ $('screen').addEventListener('mousemove', (event) => {
       `norm   ${described.norm[0].toFixed(4)}, ${described.norm[1].toFixed(4)}`;
   }
   if (dragStart && $('mode-select').checked) {
-    state.selection = geo.normaliseRect(dragStart, point);
+    setSelectionFromCss(geo.normaliseRect(dragStart, point), { render: false });
+  } else if (dragStart && $('mode-tap').checked) {
+    dragCurrent = point;
+    const now = performance.now();
+    // Pointer events can exceed the phone refresh rate. Capping MOVE traffic
+    // keeps the control channel responsive while remaining visually smooth.
+    if (dragViaControl && now - lastMoveSentAt >= 16) {
+      sendLiveTouch('move', point);
+      lastMoveSentAt = now;
+    }
   }
   drawOverlay(point);
 });
 
-$('screen').addEventListener('mouseleave', () => {
+stageBody.addEventListener('pointerleave', () => {
+  if (dragStart) return;
   $('readout').hidden = true;
   drawOverlay(null);
 });
 
-$('screen').addEventListener('mousedown', (event) => {
-  if (!state.session) return;
-  dragStart = canvasPoint(event);
-  if ($('mode-select').checked) state.selection = null;
+stageBody.addEventListener('pointerdown', (event) => {
+  if (!state.session || event.button !== 0) return;
+  const point = canvasPoint(event);
+  if (!point) return;
+  event.preventDefault();
+  dragStart = point;
+  dragCurrent = point;
+  dragStartedAt = performance.now();
+  activePointer = event.pointerId;
+  stageBody.setPointerCapture?.(event.pointerId);
+  if ($('mode-select').checked) {
+    state.selection = null;
+    syncSelectionEditor();
+  } else if ($('mode-tap').checked) {
+    dragViaControl = sendLiveTouch('down', point);
+    lastMoveSentAt = dragStartedAt;
+  }
 });
 
-$('screen').addEventListener('mouseup', async (event) => {
-  if (!state.session || !dragStart) return;
-  const point = canvasPoint(event);
+stageBody.addEventListener('pointerup', async (event) => {
+  if (!state.session || !dragStart || event.pointerId !== activePointer) return;
+  const point = canvasPoint(event, { clamp: true });
   const moved = Math.hypot(point.x - dragStart.x, point.y - dragStart.y);
   const start = dragStart;
+  const durationMs = Math.max(50, Math.min(10000, Math.round(performance.now() - dragStartedAt)));
+  const usedLiveControl = dragViaControl;
   dragStart = null;
+  dragCurrent = null;
+  dragViaControl = false;
+  activePointer = null;
+  stageBody.releasePointerCapture?.(event.pointerId);
 
-  if ($('mode-select').checked && moved > 4) {
-    state.selection = geo.normaliseRect(start, point);
+  if ($('mode-select').checked) {
+    if (moved > 4) {
+      setSelectionFromCss(geo.normaliseRect(start, point));
+    } else {
+      // Selection-mode clicks still give visible feedback: seed a small box
+      // that can then be sized precisely in the inspector.
+      const width = Math.min(80, canvasSize().width * 0.15);
+      const height = Math.min(80, canvasSize().height * 0.15);
+      setSelectionFromCss({
+        x: Math.max(0, point.x - width / 2),
+        y: Math.max(0, point.y - height / 2),
+        width,
+        height,
+      });
+    }
     drawOverlay(point);
     return;
   }
+  if (!$('mode-tap').checked) return;
+  if (usedLiveControl) {
+    // DOWN+UP is already the tap. Calling REST here too would double-click.
+    const released = sendLiveTouch('up', point);
+    await describePoint(point);
+    if (!released) {
+      // If the live socket dropped mid-gesture, a complete REST swipe also
+      // guarantees the virtual finger is not left pressed on the phone.
+      if (moved <= 4) await tapAt(point);
+      else await swipeAt(start, point, durationMs);
+      return;
+    }
+    showGestureFeedback(start, point, moved <= 4 ? '点击已发送' : `拖拽已发送 · ${durationMs} ms`);
+    return;
+  }
   await describePoint(point);
-  if ($('mode-tap').checked && moved <= 4) await tapAt(point);
+  if (moved <= 4) await tapAt(point);
+  else await swipeAt(start, point, durationMs);
+});
+
+stageBody.addEventListener('pointercancel', () => {
+  cancelPointerGesture();
+});
+
+window.addEventListener('blur', cancelPointerGesture);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) cancelPointerGesture();
 });
 
 async function describePoint(point) {
@@ -354,6 +744,7 @@ async function describePoint(point) {
   const described = geo.describe(point, element, frame, display);
   if (!described) return;
   state.lastPoint = described;
+  $('add-tap-step').disabled = !state.script;
   try {
     // The server is authoritative for anything that gets recorded, and it is the
     // only side that can name the control under the cursor.
@@ -395,12 +786,22 @@ function renderPointInfo(described, info) {
     }
   } else if (info.a11y_available === false) {
     html += '<div class="note">无控件树（游戏 / Canvas 界面），请用模板或 OCR 定位</div>';
+  } else if (info.error) {
+    html += `<div class="note">坐标读取失败：${escapeHtml(info.error)}</div>`;
   }
   $('point-info').innerHTML = html;
 }
 
 async function tapAt(point) {
   const element = canvasSize();
+  tapFeedback = point;
+  drawOverlay(point);
+  setTimeout(() => {
+    if (tapFeedback === point) {
+      tapFeedback = null;
+      drawOverlay(null);
+    }
+  }, 450);
   try {
     await api.tap(state.selected, {
       token: state.session.token,
@@ -410,12 +811,89 @@ async function tapAt(point) {
       element_width: Math.round(element.width),
       element_height: Math.round(element.height),
     });
+    $('point-info').insertAdjacentHTML('beforeend', '<div><span>动作</span><span>点击已发送</span></div>');
+    refreshAfterControl();
   } catch (error) {
     toast(`点击失败：${error.message}`);
   }
 }
 
+function showGestureFeedback(start, end, label) {
+  tapFeedback = end;
+  drawOverlay(end);
+  setTimeout(() => {
+    if (tapFeedback === end) {
+      tapFeedback = null;
+      drawOverlay(null);
+    }
+  }, 450);
+  $('point-info').insertAdjacentHTML(
+    'beforeend',
+    `<div><span>动作</span><span>${escapeHtml(label)}</span></div>` +
+      `<div><span>路径</span><span>${Math.round(start.x)}, ${Math.round(start.y)} → ` +
+      `${Math.round(end.x)}, ${Math.round(end.y)}</span></div>`,
+  );
+}
+
+async function swipeAt(start, end, durationMs) {
+  const element = canvasSize();
+  try {
+    await api.swipe(state.selected, {
+      token: state.session.token,
+      x1: start.x,
+      y1: start.y,
+      x2: end.x,
+      y2: end.y,
+      duration_ms: durationMs,
+      space: 'css',
+      element_width: Math.round(element.width),
+      element_height: Math.round(element.height),
+    });
+    showGestureFeedback(start, end, `滑动已发送 · ${durationMs} ms`);
+    refreshAfterControl();
+  } catch (error) {
+    toast(`拖拽失败：${error.message}`);
+  }
+}
+
 // ---------------------------------------------------------------- templates
+
+async function loadStorage() {
+  try {
+    state.storage = await api.storage(state.project?.id);
+  } catch (error) {
+    state.storage = null;
+    $('template-result').innerHTML =
+      `<div class="note">保存目录读取失败：${escapeHtml(error.message)}</div>`;
+  }
+  syncStoragePanel();
+}
+
+function syncStoragePanel() {
+  const destination = $('save-destination').value;
+  const projectMode = destination === 'project';
+  const projectOption = $('save-destination').querySelector('option[value="project"]');
+  projectOption.disabled = !state.project;
+  if (projectMode && !state.project) {
+    $('save-destination').value = 'assets';
+  }
+  const actualProjectMode = $('save-destination').value === 'project';
+  const path = actualProjectMode
+    ? state.storage?.project_templates
+    : state.storage?.asset_root;
+  $('save-path').value = path || '';
+  $('save-path').title = path || '保存目录不可用';
+  $('asset-subdir').disabled = actualProjectMode;
+  const canSave = Boolean(
+    state.selection &&
+    state.session?.capabilities?.screenshot &&
+    path &&
+    (!actualProjectMode || state.project),
+  );
+  $('save-template').disabled = !canSave;
+}
+
+$('save-destination').onchange = syncStoragePanel;
 
 $('save-template').onclick = async () => {
   if (!state.selection || !state.session) {
@@ -427,26 +905,26 @@ $('save-template').onclick = async () => {
     toast('给模板起个名字');
     return;
   }
-  if (!state.project) {
-    toast('先选择或新建一个项目');
+  const projectMode = $('save-destination').value === 'project';
+  if (projectMode && !state.project) {
+    toast('“项目模板”需要先选择或新建一个项目');
     return;
   }
-  const element = canvasSize();
   try {
     const result = await api.crop(state.selected, {
       token: state.session.token,
-      project_id: state.project.id,
+      project_id: projectMode ? state.project.id : null,
+      folder: projectMode ? null : ($('asset-subdir').value.trim() || null),
       name,
       x: state.selection.x,
       y: state.selection.y,
       width: state.selection.width,
       height: state.selection.height,
-      space: 'css',
-      element_width: Math.round(element.width),
-      element_height: Math.round(element.height),
+      space: 'device',
     });
     $('template-result').innerHTML =
-      `<div><span>文件</span><span>${escapeHtml(result.file)}</span></div>` +
+      `<div><span>已保存</span><span>${escapeHtml(`${result.directory}/${result.file}`)}</span></div>` +
+      `<div><span>用途</span><span>${result.destination === 'project_template' ? '项目模板' : '独立素材'}</span></div>` +
       `<div><span>像素</span><span>${result.width}×${result.height}</span></div>` +
       `<div><span>device</span><span>${result.device_rect.join(', ')}</span></div>` +
       `<div><span>中心 norm</span><span>${result.center_norm.map((v) => v.toFixed(4)).join(', ')}</span></div>` +
@@ -500,8 +978,36 @@ $('diagnose').onclick = async () => {
   }
 };
 
-$('key-back').onclick = () => api.key(state.selected, state.session.token, 4).catch(() => {});
-$('key-home').onclick = () => api.key(state.selected, state.session.token, 3).catch(() => {});
+async function sendKey(keycode) {
+  try {
+    await api.key(state.selected, state.session.token, keycode);
+    refreshAfterControl();
+  } catch (error) {
+    toast(`按键失败：${error.message}`);
+  }
+}
+
+$('key-back').onclick = () => sendKey(4);
+$('key-home').onclick = () => sendKey(3);
+
+async function sendDeviceText() {
+  const value = $('device-text').value;
+  if (!value) {
+    toast('请输入要发送的文字');
+    return;
+  }
+  try {
+    await api.text(state.selected, state.session.token, value);
+    refreshAfterControl();
+  } catch (error) {
+    toast(`发送文字失败：${error.message}`);
+  }
+}
+
+$('send-text').onclick = sendDeviceText;
+$('device-text').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') sendDeviceText();
+});
 
 // ---------------------------------------------------------------- projects
 
@@ -509,6 +1015,7 @@ async function loadProjects() {
   const projects = await api.projects().catch(() => []);
   const select = $('project-select');
   select.textContent = '';
+  select.disabled = projects.length === 0;
   for (const project of projects) {
     const option = document.createElement('option');
     option.value = project.id;
@@ -522,15 +1029,23 @@ async function loadProjects() {
   } else {
     state.project = null;
     state.script = null;
-    $('script-select').textContent = '';
+    select.innerHTML = '<option>未创建项目</option>';
+    $('script-select').innerHTML = '<option>未创建脚本</option>';
+    $('script-select').disabled = true;
+    $('export-script').disabled = true;
     renderSteps();
   }
+  $('new-script').disabled = !state.project;
+  syncSelectionEditor();
+  await loadStorage();
 }
 
 $('project-select').onchange = async () => {
   const projects = await api.projects().catch(() => []);
   state.project = projects.find((p) => p.id === $('project-select').value) || null;
   renderScripts();
+  setSessionControlsEnabled(Boolean(state.session));
+  await loadStorage();
 };
 
 $('new-project').onclick = async () => {
@@ -552,6 +1067,7 @@ function renderScripts() {
   const select = $('script-select');
   select.textContent = '';
   const scripts = state.project?.scripts || [];
+  select.disabled = scripts.length === 0;
   for (const script of scripts) {
     const option = document.createElement('option');
     option.value = script.id;
@@ -560,8 +1076,13 @@ function renderScripts() {
   }
   state.script = scripts.find((s) => s.id === select.value) || scripts[0] || null;
   if (state.script) select.value = state.script.id;
+  else select.innerHTML = '<option>未创建脚本</option>';
   renderSteps();
   $('run-script').disabled = !state.session || !state.script;
+  $('add-tap-step').disabled = !state.session || !state.script || !state.lastPoint;
+  $('export-script').disabled = !state.script;
+  $('new-script').disabled = !state.project;
+  syncSelectionEditor();
 }
 
 $('script-select').onchange = () => {
@@ -828,6 +1349,7 @@ async function loadHealth() {
     const caps = health.capabilities || {};
     $('health').innerHTML =
       `<div><span>adb</span><span>${health.adb_available ? '就绪' : '未找到'}</span></div>` +
+      `<div><span>设备源</span><span>${escapeHtml(health.device_provider || 'local-adb')}</span></div>` +
       `<div><span>scrcpy jar</span><span>${caps.scrcpy_jar ? '就绪' : '缺失'}</span></div>` +
       `<div><span>OCR</span><span>${caps.ocr ? '就绪' : '未安装'}</span></div>`;
   } catch {
@@ -860,35 +1382,73 @@ function slug(value) {
 
 // ---------------------------------------------------------------- wireless
 
-$('wireless-connect').onclick = async () => {
-  const address = $('wireless-address').value.trim();
-  if (!address) {
-    toast('填一个 host:port，例如 192.168.2.5:5555');
-    return;
+function wirelessFailureMessage(address, error) {
+  if (/connection refused/i.test(error.message)) {
+    return `${address} 可以到达，但手机没有开放 ADB 端口。` +
+      '请保持 USB 调试连接，先点“开启 5555 并自动连接”。';
   }
-  $('wireless-result').innerHTML = '<div class="muted">连接中…</div>';
+  if (/timed out|timeout|no route|unreachable/i.test(error.message)) {
+    return `无法到达 ${address}。请确认电脑和手机在同一局域网，且手机 IP 没有变化。`;
+  }
+  return error.message;
+}
+
+async function connectWirelessAddress(address, { quiet = false } = {}) {
+  if (!quiet) $('wireless-result').innerHTML = '<div class="muted">连接中…</div>';
   try {
     const result = await api.connectWireless(address);
     // The tracker picks the device up on its own; no refresh needed, but doing
     // it makes the list update feel immediate rather than a beat later.
     $('wireless-result').innerHTML = `<div><span>已连接</span><span>${escapeHtml(result.address)}</span></div>`;
     loadDevices();
+    return true;
   } catch (error) {
-    $('wireless-result').innerHTML = `<div class="note">${escapeHtml(error.message)}</div>`;
+    if (!quiet) {
+      $('wireless-result').innerHTML =
+        `<div class="note">${escapeHtml(wirelessFailureMessage(address, error))}</div>`;
+    }
+    return false;
   }
+}
+
+$('wireless-connect').onclick = async () => {
+  const address = $('wireless-address').value.trim();
+  if (!address) {
+    toast('填一个 host:port，例如 192.168.2.5:5555');
+    return;
+  }
+  await connectWirelessAddress(address);
 };
 
 $('wireless-tcpip').onclick = async () => {
   if (!state.selected) return;
-  $('wireless-result').innerHTML = '<div class="muted">切换中…</div>';
+  if (state.session) {
+    toast('先释放当前设备，再切换无线连接；重启 adbd 会中断当前会话');
+    return;
+  }
+  $('wireless-result').innerHTML = '<div class="muted">正在读取手机 IP 并开启 5555 端口…</div>';
   try {
     const result = await api.enableTcpip(state.selected);
     if (result.suggested_address) {
       // Pre-fill so the address does not have to be hunted down in Settings.
       $('wireless-address').value = result.suggested_address;
       $('wireless-result').innerHTML =
-        `<div><span>已转无线</span><span>${escapeHtml(result.suggested_address)}</span></div>` +
-        '<div class="muted" style="font-size:12px">数据线可以拔了，然后点「连接」。</div>';
+        `<div><span>端口已开启</span><span>${escapeHtml(result.suggested_address)}</span></div>` +
+        '<div class="muted" style="font-size:12px">等待手机 adbd 重启并自动连接…</div>';
+      let connected = false;
+      for (let attempt = 0; attempt < 6 && !connected; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        connected = await connectWirelessAddress(result.suggested_address, { quiet: true });
+      }
+      if (connected) {
+        $('wireless-result').innerHTML =
+          `<div><span>无线已连接</span><span>${escapeHtml(result.suggested_address)}</span></div>` +
+          '<div class="muted" style="font-size:12px">现在可以拔掉数据线。</div>';
+      } else {
+        $('wireless-result').innerHTML =
+          `<div class="note">端口已开启，但自动连接 ${escapeHtml(result.suggested_address)} 失败。` +
+          '保持数据线连接，稍等几秒后点“直接连接”。</div>';
+      }
     } else {
       $('wireless-result').innerHTML =
         `<div class="note">已切到 TCP 模式（端口 ${result.port}），但读不到手机的 wlan0 地址。` +
@@ -902,12 +1462,8 @@ $('wireless-tcpip').onclick = async () => {
 $('refresh-devices').onclick = loadDevices;
 $('connect').onclick = () => connect(false);
 $('release').onclick = release;
-$('mode-tap').onchange = () => {
-  if ($('mode-tap').checked) $('mode-select').checked = false;
-};
-$('mode-select').onchange = () => {
-  if ($('mode-select').checked) $('mode-tap').checked = false;
-};
+$('mode-tap').onchange = () => { $('screen').style.cursor = 'crosshair'; };
+$('mode-select').onchange = () => { $('screen').style.cursor = 'cell'; };
 window.addEventListener('resize', () => {
   syncOverlaySize();
   drawOverlay(null);

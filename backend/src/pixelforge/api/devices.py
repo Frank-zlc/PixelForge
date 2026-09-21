@@ -17,7 +17,15 @@ from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field
 
 from pixelforge.adb.client import AdbError
-from pixelforge.api.deps import AdbDep, LeasesDep, RegistryDep, SessionsDep, StoreDep
+from pixelforge.api.deps import (
+    AdbDep,
+    LeasesDep,
+    ListenersDep,
+    RegistryDep,
+    SessionsDep,
+    StoreDep,
+    require_lease,
+)
 from pixelforge.device.lease import (
     DeviceBusyError,
     LeaseError,
@@ -57,6 +65,7 @@ class SessionResponse(BaseModel):
     frame: list[int] | None = None
     rotation: int = 0
     notes: list[str] = Field(default_factory=list)
+    listeners: list[dict[str, object]] = Field(default_factory=list)
 
 
 class RenewRequest(BaseModel):
@@ -73,6 +82,11 @@ class ConnectRequest(BaseModel):
 
 class TcpipRequest(BaseModel):
     port: int = Field(default=5555, ge=1024, le=65535)
+
+
+class ListenerStartRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=64)
+    project_id: str = Field(min_length=1, max_length=64)
 
 
 @router.post("/connect")
@@ -114,8 +128,11 @@ async def enable_tcpip(
     if device is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown device: {serial}")
     try:
-        message = await adb.tcpip(serial, body.port)
+        # Read the address before restarting adbd. `adb tcpip` deliberately
+        # tears down the USB transport for a moment, so asking for wlan0 after
+        # it often races the reconnect and returns no address at all.
         address = await adb.device_ip(serial)
+        message = await adb.tcpip(serial, body.port)
     except AdbError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return {
@@ -147,6 +164,7 @@ async def open_session(
     registry: RegistryDep,
     leases: LeasesDep,
     sessions: SessionsDep,
+    listeners: ListenersDep,
     store: StoreDep,
 ) -> SessionResponse:
     device = registry.get(serial)
@@ -178,17 +196,44 @@ async def open_session(
         )
 
     templates_dir = None
+    project = None
     if body.project_id:
         try:
+            project = store.get(body.project_id)
             templates_dir = store.templates_dir(body.project_id)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            leases.release(lease.token)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
     try:
-        _, device_status = await sessions.open(serial, props, templates_dir=templates_dir)
-    except Exception as exc:  # noqa: BLE001
+        adb_serial = await registry.acquire(serial, ttl_s=lease.ttl_s)
+        session, device_status = await sessions.open(
+            serial,
+            props,
+            adb_serial=adb_serial,
+            templates_dir=templates_dir,
+        )
+    except Exception as exc:
         leases.release(lease.token)
+        await registry.release(serial)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"could not open {serial}: {exc}") from exc
+
+    listener_statuses: list[dict[str, object]] = []
+    if project is not None:
+        listener_statuses = [
+            item.as_dict()
+            for item in await listeners.start(
+                serial,
+                adb_serial=session.serial,
+                configs=project.listeners,
+                app_package=project.app_package,
+            )
+        ]
+        for item in listener_statuses:
+            if item["error"]:
+                device_status.notes.append(
+                    f"listener {item['name']} unavailable: {item['error']}"
+                )
 
     return SessionResponse(
         token=lease.token,
@@ -206,6 +251,7 @@ async def open_session(
         frame=list(device_status.frame) if device_status.frame else None,
         rotation=device_status.rotation,
         notes=device_status.notes,
+        listeners=listener_statuses,
     )
 
 
@@ -216,6 +262,7 @@ async def renew_session(
     registry: RegistryDep,
     leases: LeasesDep,
     sessions: SessionsDep,
+    listeners: ListenersDep,
 ) -> SessionResponse:
     # Three distinct client actions, three statuses: 410 re-acquire after timeout,
     # 409 someone took over, 404 this token was never valid.
@@ -229,6 +276,13 @@ async def renew_session(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     if lease.device_id != serial:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "token does not belong to this device")
+    try:
+        await registry.renew(serial, ttl_s=lease.ttl_s)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"could not renew provider reservation for {serial}: {exc}",
+        ) from exc
 
     device = registry.get(serial)
     if device is None:
@@ -251,6 +305,7 @@ async def renew_session(
         frame=list(device_status.frame) if device_status and device_status.frame else None,
         rotation=device_status.rotation if device_status else 0,
         notes=device_status.notes if device_status else [],
+        listeners=[item.as_dict() for item in listeners.statuses(serial)],
     )
 
 
@@ -259,11 +314,59 @@ async def close_session(
     serial: str,
     leases: LeasesDep,
     sessions: SessionsDep,
+    listeners: ListenersDep,
+    registry: RegistryDep,
     token: str = Body(embed=True, min_length=1, max_length=64),
 ) -> None:
-    # release() is idempotent, so a page-unload plus an explicit click is fine.
-    leases.release(token)
+    require_lease(leases, serial, token)
+    await listeners.stop(serial)
     await sessions.close(serial)
+    await registry.release(serial)
+    leases.release(token)
+
+
+@router.get("/{serial}/listeners")
+async def listener_status(serial: str, listeners: ListenersDep) -> list[dict[str, object]]:
+    return [item.as_dict() for item in listeners.statuses(serial)]
+
+
+@router.post("/{serial}/listeners/start")
+async def start_listeners(
+    serial: str,
+    body: ListenerStartRequest,
+    leases: LeasesDep,
+    sessions: SessionsDep,
+    listeners: ListenersDep,
+    store: StoreDep,
+) -> list[dict[str, object]]:
+    require_lease(leases, serial, body.token)
+    session = sessions.get(serial)
+    if session is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"no open session for {serial}")
+    try:
+        project = store.get(body.project_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return [
+        item.as_dict()
+        for item in await listeners.start(
+            serial,
+            adb_serial=session.serial,
+            configs=project.listeners,
+            app_package=project.app_package,
+        )
+    ]
+
+
+@router.post("/{serial}/listeners/stop", status_code=status.HTTP_204_NO_CONTENT)
+async def stop_listeners(
+    serial: str,
+    body: RenewRequest,
+    leases: LeasesDep,
+    listeners: ListenersDep,
+) -> None:
+    require_lease(leases, serial, body.token)
+    await listeners.stop(serial)
 
 
 @router.get("/{serial}/session/status")

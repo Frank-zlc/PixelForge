@@ -9,7 +9,7 @@ produced by the tool rather than typed by hand.
 
 from __future__ import annotations
 
-from typing import Annotated
+from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from pixelforge.api.deps import (
     LeasesDep,
     SessionsDep,
+    SettingsDep,
     StoreDep,
     require_lease,
     require_session,
@@ -45,7 +46,12 @@ class CaptureRequest(BaseModel):
 
 class CropRequest(BaseModel):
     token: str = Field(min_length=1, max_length=64)
-    project_id: str = Field(min_length=1, max_length=64)
+    project_id: str | None = Field(default=None, min_length=1, max_length=64)
+    folder: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Relative folder below the configured standalone asset root.",
+    )
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     x: float
     y: float
@@ -61,12 +67,35 @@ class CropRequest(BaseModel):
 class CropResponse(BaseModel):
     name: str
     file: str
+    directory: str
+    destination: str
     device_rect: list[int]
     norm_rect: list[float]
     center_norm: list[float]
     width: int
     height: int
     warning: str | None = None
+
+
+def _asset_output_path(root: Path, folder: str | None, name: str) -> Path:
+    """Resolve a browser-supplied subdirectory without permitting path escape."""
+    relative = PurePosixPath(folder or "")
+    parts = relative.parts
+    if relative.is_absolute() or any(
+        part in {"", ".", ".."}
+        or not all(char.isalnum() or char in "-_" for char in part)
+        for part in parts
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "folder must be a relative path using letters, digits, '-' and '_'",
+        )
+    root = root.resolve()
+    directory = root.joinpath(*parts).resolve()
+    if directory != root and root not in directory.parents:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "folder escapes asset root")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{name}.png"
 
 
 class PointRequest(BaseModel):
@@ -109,6 +138,7 @@ async def crop(
     leases: LeasesDep,
     sessions: SessionsDep,
     store: StoreDep,
+    settings: SettingsDep,
 ) -> CropResponse:
     require_lease(leases, serial, body.token)
     session = require_session(sessions, serial)
@@ -144,7 +174,16 @@ async def crop(
     ok, encoded = cv2.imencode(".png", cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
     if not ok:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "could not encode the crop")
-    path = store.save_template(body.project_id, body.name, encoded.tobytes())
+    if body.project_id:
+        try:
+            path = store.save_template(body.project_id, body.name, encoded.tobytes())
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        destination = "project_template"
+    else:
+        path = _asset_output_path(settings.assets_dir, body.folder, body.name)
+        path.write_bytes(encoded.tobytes())
+        destination = "asset"
 
     display = session.display
     warning = None
@@ -161,6 +200,8 @@ async def crop(
     return CropResponse(
         name=body.name,
         file=path.name,
+        directory=str(path.parent.resolve()),
+        destination=destination,
         device_rect=[device_rect.x, device_rect.y, device_rect.width, device_rect.height],
         norm_rect=[
             round(device_rect.x / display.width, 6),

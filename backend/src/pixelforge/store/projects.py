@@ -101,6 +101,7 @@ class ProjectStore:
     # ---------------------------------------------------------- templates
 
     def save_template(self, project_id: str, name: str, png: bytes) -> Path:
+        self.get(project_id)
         _validate_id(name.removesuffix(".png"))
         path = self.templates_dir(project_id) / f"{name.removesuffix('.png')}.png"
         path.write_bytes(png)

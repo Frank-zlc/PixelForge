@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +58,7 @@ __all__ = ["DeviceSession"]
 # stale screen.
 _SCREENSHOT_TTL_S = 0.4
 _SWIPE_STEPS = 12
+_ADB_TEXT_SAFE = re.compile(r"^[A-Za-z0-9 @._+,/:=%-]+$")
 
 
 @dataclass
@@ -93,9 +95,7 @@ class DeviceSession:
         natural = Size(*(props.size or (1080, 1920)))
         self._mapper = CoordinateMapper(device=natural, frame=natural)
         self._rotations: asyncio.Queue[Rotation] = asyncio.Queue(maxsize=8)
-        self.scrcpy = ScrcpySession(
-            adb, serial, config=scrcpy_config, on_rotation=self._rotations
-        )
+        self.scrcpy = ScrcpySession(adb, serial, config=scrcpy_config, on_rotation=self._rotations)
         self.screencap = ScreencapPort(adb, mode=capture_mode)
         self.uiautomator = UiAutomatorPort(adb, serial)
 
@@ -126,6 +126,12 @@ class DeviceSession:
         return await self.uiautomator.hierarchy()
 
     async def tap(self, box: Rect) -> None:
+        if not self.scrcpy.state.started:
+            point = box.center
+            await self._adb.shell(
+                self.serial, ["input", "tap", str(int(point.x)), str(int(point.y))]
+            )
+            return
         point = self._to_frame(box.center)
         frame = self._mapper.frame
         await self.scrcpy.send(
@@ -134,6 +140,22 @@ class DeviceSession:
         )
 
     async def long_press(self, box: Rect, duration_ms: int) -> None:
+        if not self.scrcpy.state.started:
+            point = box.center
+            await self._adb.shell(
+                self.serial,
+                [
+                    "input",
+                    "swipe",
+                    str(int(point.x)),
+                    str(int(point.y)),
+                    str(int(point.x)),
+                    str(int(point.y)),
+                    str(duration_ms),
+                ],
+                timeout=max(15.0, duration_ms / 1000 + 5),
+            )
+            return
         point = self._to_frame(box.center)
         frame = self._mapper.frame
         await self.scrcpy.send(
@@ -151,6 +173,24 @@ class DeviceSession:
         detection and most drag handlers need the movement to look continuous --
         a single large MOVE is frequently treated as a tap or ignored.
         """
+        if not self.scrcpy.state.started:
+            origin = start.center
+            target = end.center
+            await self._adb.shell(
+                self.serial,
+                [
+                    "input",
+                    "swipe",
+                    str(int(origin.x)),
+                    str(int(origin.y)),
+                    str(int(target.x)),
+                    str(int(target.y)),
+                    str(duration_ms),
+                ],
+                timeout=max(15.0, duration_ms / 1000 + 5),
+            )
+            return
+
         frame = self._mapper.frame
         origin = self._to_frame(start.center)
         target = self._to_frame(end.center)
@@ -175,14 +215,23 @@ class DeviceSession:
         )
 
     async def input_text(self, text: str) -> None:
+        if not self.scrcpy.state.started:
+            if not text.isascii() or _ADB_TEXT_SAFE.fullmatch(text) is None:
+                raise RuntimeError(
+                    "scrcpy 未连接时只能通过 ADB 输入字母、数字、空格和常用安全符号。"
+                    "中文或其他字符需要安装 scrcpy-server.jar"
+                )
+            await self._adb.shell(self.serial, ["input", "text", text.replace(" ", "%s")])
+            return
         messages = encode_text(text)
         if messages:
             await self.scrcpy.send(*messages)
 
     async def key(self, keycode: int) -> None:
-        await self.scrcpy.send(
-            encode_key(Action.DOWN, keycode), encode_key(Action.UP, keycode)
-        )
+        if not self.scrcpy.state.started:
+            await self._adb.shell(self.serial, ["input", "keyevent", str(keycode)])
+            return
+        await self.scrcpy.send(encode_key(Action.DOWN, keycode), encode_key(Action.UP, keycode))
 
     async def launch_app(self, package: str) -> None:
         await self._adb.shell(
@@ -221,9 +270,7 @@ class DeviceSession:
         """Crop for template creation -- always from a fresh lossless capture."""
         capture = await self.capture(fresh=True)
         device_rect = (
-            rect
-            if space is Space.DEVICE
-            else self._mapper.convert_rect(rect, space, Space.DEVICE)
+            rect if space is Space.DEVICE else self._mapper.convert_rect(rect, space, Space.DEVICE)
         )
         return capture.crop(device_rect)
 
@@ -261,10 +308,12 @@ class DeviceSession:
         to start can still be inspected and screenshotted. Refusing to open the
         session at all would throw that away.
         """
-        status = SessionStatus(serial=self.serial)
+        # ADB itself provides a slower but dependable fallback for taps, swipes
+        # and key events.  scrcpy upgrades that path to low latency and UTF-8.
+        status = SessionStatus(serial=self.serial, control=True)
         try:
             await self.scrcpy.start()
-            status.video = status.control = True
+            status.video = True
             if self.scrcpy.state.frame is not None:
                 self._mapper = self._mapper.with_(frame=self.scrcpy.state.frame)
                 status.frame = self.scrcpy.state.frame.as_tuple()
@@ -272,7 +321,9 @@ class DeviceSession:
                 self._follow_rotation(), name=f"pixelforge-rot-follow-{self.serial}"
             )
         except ScrcpyStartupError as exc:
-            self.notes.append(f"video/control unavailable: {exc}")
+            self.notes.append(
+                f"live video unavailable: {exc}; using lossless screenshots and ADB control"
+            )
             logger.warning("scrcpy unavailable on %s: %s", self.serial, exc)
 
         status.a11y = await self.uiautomator.start()
@@ -319,7 +370,7 @@ class DeviceSession:
         return SessionStatus(
             serial=self.serial,
             video=state.started,
-            control=state.started,
+            control=True,
             a11y=self.uiautomator.available,
             display=self._mapper.display.as_tuple(),
             frame=self._mapper.frame.as_tuple(),
@@ -345,6 +396,12 @@ class DeviceSession:
         if observed.as_tuple() == natural.swapped().as_tuple():
             if not self._mapper.rotation.swaps_axes:
                 self._mapper = self._mapper.with_(rotation=Rotation.R90)
+        elif observed.as_tuple() == natural.as_tuple():
+            # Without scrcpy there are no rotation events. A fresh screencap is
+            # therefore also the signal that a landscape device returned to its
+            # natural orientation.
+            if self._mapper.rotation.swaps_axes:
+                self._mapper = self._mapper.with_(rotation=Rotation.R0)
         elif observed.as_tuple() != natural.as_tuple():
             # An override or a resolution change; the image is authoritative.
             self._mapper = self._mapper.with_(device=observed, rotation=Rotation.R0)

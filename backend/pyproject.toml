@@ -22,6 +22,7 @@ pixelforge = "pixelforge.cli:main"
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "httpx2>=2.13",        # Starlette 1.x TestClient transport
     "ruff>=0.7",
     "mypy>=1.13",
 ]
@@ -37,7 +38,11 @@ packages = ["src/pixelforge"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Starlette 1.x still imports this compatibility alias internally.
+    "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

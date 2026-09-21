@@ -36,6 +36,7 @@ export class Player {
     // Nothing can be decoded before the parameter sets arrive, so deltas that
     // precede them are discarded rather than queued into an error.
     this._configured = false;
+    this._parameterSets = null;
   }
 
   get supported() {
@@ -52,6 +53,10 @@ export class Player {
       return;
     }
     this.close();
+    this.decoded = 0;
+    this.dropped = 0;
+    this._fpsWindow = [];
+    this._parameterSets = null;
     const url = new URL(`/ws/screen/${encodeURIComponent(serial)}`, location.href);
     url.protocol = url.protocol.replace('http', 'ws');
     this.socket = new WebSocket(url);
@@ -91,6 +96,7 @@ export class Player {
 
   _startDecoder(codec) {
     this._configured = false;
+    this._parameterSets = null;
     this.decoder = new VideoDecoder({
       output: (frame) => this._draw(frame),
       error: (error) => {
@@ -111,28 +117,49 @@ export class Player {
     const isConfig = (flags & FLAG_CONFIG) !== 0;
     const isKey = (flags & FLAG_KEYFRAME) !== 0;
 
-    if (isConfig) this._configured = true;
+    // scrcpy sends SPS/PPS as a standalone packet. WebCodecs in Annex-B mode
+    // expects those parameter sets in the same key chunk as the first IDR;
+    // decoding the config packet by itself makes Chrome reject it and then the
+    // real keyframe has no decoder configuration.
+    if (isConfig) {
+      this._parameterSets = payload.slice();
+      return;
+    }
     if (!this._configured && !isKey) {
       this.dropped += 1;
       return;
     }
-    if (isKey) this._configured = true;
+    let chunkData = payload;
+    if (isKey) {
+      this._configured = true;
+      if (this._parameterSets?.length) {
+        chunkData = new Uint8Array(this._parameterSets.length + payload.length);
+        chunkData.set(this._parameterSets);
+        chunkData.set(payload, this._parameterSets.length);
+      }
+    }
 
     try {
       this.decoder.decode(
         new EncodedVideoChunk({
-          type: isKey || isConfig ? 'key' : 'delta',
+          type: isKey ? 'key' : 'delta',
           timestamp: performance.now() * 1000,
-          data: payload,
+          data: chunkData,
         }),
       );
     } catch (error) {
       this.dropped += 1;
+      if (this.decoded === 0) {
+        this.onStatus({ state: 'error', detail: `decode rejected: ${error.message}` });
+      }
     }
   }
 
   _draw(frame) {
-    if (this.canvas.width !== frame.displayWidth) {
+    if (
+      this.canvas.width !== frame.displayWidth ||
+      this.canvas.height !== frame.displayHeight
+    ) {
       this.canvas.width = frame.displayWidth;
       this.canvas.height = frame.displayHeight;
       this.frame = { width: frame.displayWidth, height: frame.displayHeight };
@@ -164,5 +191,6 @@ export class Player {
     }
     this.decoder = null;
     this._configured = false;
+    this._parameterSets = null;
   }
 }

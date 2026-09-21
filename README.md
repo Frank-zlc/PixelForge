@@ -104,6 +104,22 @@ pixelforge connect 192.168.2.5:5555
 pixelforge disconnect 192.168.2.5:5555
 ```
 
+要改用 DeviceFarmer/STF 设备池，在 `backend/.env` 配置：
+
+```dotenv
+PIXELFORGE_DEVICE_PROVIDER=devicefarmer
+PIXELFORGE_DEVICEFARMER_URL=https://devices.example.com
+PIXELFORGE_DEVICEFARMER_ACCESS_TOKEN=replace-with-minimal-api-token
+```
+
+PixelForge 使用 DeviceFarmer 的公开 API 获取设备、预约/续租，并通过
+`remoteConnect` 返回的地址执行 `adb connect`。Token 只在后端读取。建议锁定
+DeviceFarmer/STF `v3.7.9`；边缘节点共享 ADB 时也支持直接使用同一 serial。
+
+项目默认启用 `logcat` 监听。获取设备后监听器随会话启动，日志进入底部统一时间线；
+项目 JSON 的 `listeners` 可关闭或传入过滤选项。`mitmproxy` 和 `pcap` 目前仍会如实显示为
+`planned`，不会伪装成已经接通的网络协议监听。
+
 > ⚠️ **只能单 worker 运行。** 设备会话、scrcpy 连接、租约、运行中的脚本都是进程内状态。
 > `--workers N` 会让请求随机落到没有该设备会话的进程上，症状是"能用，但偶尔莫名 409"。
 
@@ -327,6 +343,9 @@ PIXELFORGE_ADB_TIMEOUT_S=30
 
 # 数据目录（项目、模板、截图，默认 .pixelforge/）
 PIXELFORGE_DATA_DIR=~/.pixelforge
+
+# 独立框选 PNG 的保存根目录（默认 ${PIXELFORGE_DATA_DIR}/assets）
+PIXELFORGE_ASSET_DIR=~/Desktop/PixelForgeAssets
 
 # 租约过期时间（秒，默认 30）
 PIXELFORGE_LEASE_TTL_S=60

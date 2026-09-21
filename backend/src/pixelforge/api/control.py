@@ -72,9 +72,7 @@ async def tap(serial: str, body: TapRequest, leases: LeasesDep, sessions: Sessio
 
 
 @router.post("/{serial}/swipe", status_code=status.HTTP_204_NO_CONTENT)
-async def swipe(
-    serial: str, body: SwipeRequest, leases: LeasesDep, sessions: SessionsDep
-) -> None:
+async def swipe(serial: str, body: SwipeRequest, leases: LeasesDep, sessions: SessionsDep) -> None:
     require_lease(leases, serial, body.token)
     session = require_session(sessions, serial)
     await session.swipe(
@@ -88,7 +86,10 @@ async def swipe(
 async def text(serial: str, body: TextRequest, leases: LeasesDep, sessions: SessionsDep) -> None:
     """UTF-8 text, including CJK -- which `adb shell input text` cannot send."""
     require_lease(leases, serial, body.token)
-    await require_session(sessions, serial).input_text(body.text)
+    try:
+        await require_session(sessions, serial).input_text(body.text)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.post("/{serial}/key", status_code=status.HTTP_204_NO_CONTENT)

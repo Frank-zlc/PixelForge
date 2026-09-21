@@ -28,6 +28,7 @@ from pixelforge.geometry.mapper import (
     CoordinateMapper,
     OutsideFrameError,
     Point,
+    Rect,
     Size,
     Space,
 )
@@ -132,3 +133,41 @@ def test_letterbox_offset_is_not_rounded() -> None:
     with pytest.raises(OutsideFrameError):
         mapper.css_to_frame(Point(231, 0))
     assert mapper.css_to_frame(Point(232, 0)).x >= 0
+
+
+def test_selection_rect_round_trips_through_device_space() -> None:
+    """The editable crop panel stores DEVICE pixels and draws them in CSS."""
+    mapper = CoordinateMapper(
+        device=Size(2400, 1080),
+        frame=Size(2400, 1080),
+        element=Size(1277, 575),
+    )
+    css_rect = Rect(301, 117, 243, 139)
+    expected = mapper.convert_rect(css_rect, Space.CSS, Space.DEVICE)
+    script = f"""
+      import * as geo from {json.dumps(str(_FRONTEND))};
+      const element = {{width: 1277, height: 575}};
+      const frame = {{width: 2400, height: 1080}};
+      const display = {{width: 2400, height: 1080}};
+      const device = geo.cssRectToDevice(
+        {{x: 301, y: 117, width: 243, height: 139}}, element, frame, display
+      );
+      const css = geo.deviceRectToCss(device, element, frame, display);
+      console.log(JSON.stringify({{device, css}}));
+    """
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True, text=True, timeout=120, check=True,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["device"] == {
+        "x": expected.x,
+        "y": expected.y,
+        "width": expected.width,
+        "height": expected.height,
+    }
+    # Outward pixel rounding can grow the box by less than one displayed pixel.
+    assert abs(payload["css"]["x"] - css_rect.x) < 1
+    assert abs(payload["css"]["y"] - css_rect.y) < 1
+    assert abs(payload["css"]["width"] - css_rect.width) < 2
+    assert abs(payload["css"]["height"] - css_rect.height) < 2

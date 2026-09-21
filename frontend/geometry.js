@@ -58,6 +58,14 @@ export function frameToDevice(point, frame, display) {
   };
 }
 
+/** Device -> encoded frame, using the same independent axis scales. */
+export function deviceToFrame(point, frame, display) {
+  return {
+    x: point.x * (frame.width / display.width),
+    y: point.y * (frame.height / display.height),
+  };
+}
+
 export function deviceToNorm(point, display) {
   return { x: point.x / display.width, y: point.y / display.height };
 }
@@ -65,6 +73,47 @@ export function deviceToNorm(point, display) {
 export function frameToCss(point, element, frame) {
   const content = contentRect(element, frame);
   return { x: content.x + point.x * content.scale, y: content.y + point.y * content.scale };
+}
+
+export function deviceToCss(point, element, frame, display) {
+  return frameToCss(deviceToFrame(point, frame, display), element, frame);
+}
+
+/**
+ * CSS drag rectangle -> DEVICE pixels. The edges are clamped to the rendered
+ * frame and rounded outwards so a template never loses its outside pixel row.
+ */
+export function cssRectToDevice(rect, element, frame, display) {
+  const content = contentRect(element, frame);
+  const clampX = (value) => Math.min(Math.max(value, content.x), content.x + content.width);
+  const clampY = (value) => Math.min(Math.max(value, content.y), content.y + content.height);
+  const a = cssToFrame({ x: clampX(rect.x), y: clampY(rect.y) }, element, frame);
+  const b = cssToFrame(
+    { x: clampX(rect.x + rect.width), y: clampY(rect.y + rect.height) },
+    element,
+    frame,
+  );
+  if (!a || !b) return null;
+  const da = frameToDevice(a, frame, display);
+  const db = frameToDevice(b, frame, display);
+  const left = Math.max(0, Math.floor(Math.min(da.x, db.x)));
+  const top = Math.max(0, Math.floor(Math.min(da.y, db.y)));
+  const right = Math.min(display.width, Math.ceil(Math.max(da.x, db.x)));
+  const bottom = Math.min(display.height, Math.ceil(Math.max(da.y, db.y)));
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** DEVICE pixel rectangle -> CSS rectangle for drawing the overlay. */
+export function deviceRectToCss(rect, element, frame, display) {
+  const a = deviceToCss({ x: rect.x, y: rect.y }, element, frame, display);
+  const b = deviceToCss(
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    element,
+    frame,
+    display,
+  );
+  return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
 }
 
 /** All four representations of one CSS point, for the readout. */

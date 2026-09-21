@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,12 +36,14 @@ from pixelforge.api import devices as devices_api
 from pixelforge.api import projects as projects_api
 from pixelforge.api import runs as runs_api
 from pixelforge.config import Settings, get_settings
+from pixelforge.device.devicefarmer import DeviceFarmerProvider
 from pixelforge.device.lease import LeaseManager
 from pixelforge.device.manager import SessionManager
-from pixelforge.device.provider import LocalAdbProvider
+from pixelforge.device.provider import DeviceProvider, LocalAdbProvider
 from pixelforge.device.registry import DeviceRegistry
 from pixelforge.device.scrcpy.session import ScrcpyConfig
 from pixelforge.exporters.registry import list_exporters, load_plugin_dir
+from pixelforge.listeners.manager import ListenerManager
 from pixelforge.store.projects import ProjectStore
 from pixelforge.timeline.bus import TimelineBus
 from pixelforge.ws import events as events_ws
@@ -69,13 +70,28 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             timeout=config.adb_timeout_s,
         )
         leases = LeaseManager()
-        registry = DeviceRegistry(LocalAdbProvider(adb), adb, leases)
+        provider: DeviceProvider
+        if config.device_provider == "devicefarmer":
+            assert config.devicefarmer_url is not None
+            assert config.devicefarmer_access_token is not None
+            provider = DeviceFarmerProvider(
+                adb,
+                config.devicefarmer_url,
+                config.devicefarmer_access_token.get_secret_value(),
+                poll_interval_s=config.devicefarmer_poll_interval_s,
+                timeout_s=config.adb_timeout_s,
+                verify_ssl=config.devicefarmer_verify_ssl,
+            )
+        else:
+            provider = LocalAdbProvider(adb)
+        registry = DeviceRegistry(provider, adb, leases)
         sessions = SessionManager(
             adb,
             scrcpy_config=ScrcpyConfig(jar_path=config.vendor_dir / "scrcpy-server.jar"),
         )
         store = ProjectStore(config.data_dir / "projects")
         bus = TimelineBus()
+        listeners = ListenerManager(adb, bus)
 
         app.state.settings = config
         app.state.adb = adb
@@ -84,6 +100,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         app.state.sessions = sessions
         app.state.store = store
         app.state.bus = bus
+        app.state.listeners = listeners
         app.state.adb_available = False
 
         try:
@@ -98,7 +115,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "vendor/platform-tools/.",
                 config.adb_executable,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("adb probe failed; device features may be unavailable")
 
         if not (config.vendor_dir / "scrcpy-server.jar").is_file():
@@ -124,6 +141,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await runs_api.shutdown_runs()
+            await listeners.close_all()
             await sessions.close_all()
             await registry.stop()
 
@@ -159,6 +177,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "adb_available": app.state.adb_available,
             "adb_server_port": config.adb_server_port,
+            "device_provider": app.state.registry.provider_name,
             "devices": len(app.state.registry.list()),
             "open_sessions": sorted(sessions.statuses()),
             "capabilities": {

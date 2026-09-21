@@ -30,8 +30,9 @@ import asyncio
 import contextlib
 import logging
 import re
+import secrets
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from pixelforge.adb.client import AdbClient, AdbError
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["ScrcpyConfig", "ScrcpySession", "ScrcpyStartupError"]
 
 REMOTE_JAR = "/data/local/tmp/pixelforge-scrcpy-server.jar"
-SOCKET_NAME = "scrcpy"
+SOCKET_NAME_PREFIX = "scrcpy_"
 _ROTATION_RE = re.compile(r"\brot(?:ation)?=(\d)")
 _ORIENTATION_RE = re.compile(r"SurfaceOrientation:\s*(\d)")
 
@@ -77,12 +78,12 @@ class ScrcpyConfig:
     power_off_on_close: bool = False
     connect_timeout_s: float = 15.0
 
-    def server_args(self) -> list[str]:
-        return [
-            f"log_level=info",
-            f"video=true",
-            f"audio=false",
-            f"control=true",
+    def server_args(self, *, scid: int | None = None) -> list[str]:
+        args = [
+            "log_level=info",
+            "video=true",
+            "audio=false",
+            "control=true",
             f"max_size={self.max_size}",
             f"video_codec={self.video_codec}",
             f"video_bit_rate={self.video_bit_rate}",
@@ -96,10 +97,17 @@ class ScrcpyConfig:
             "send_dummy_byte=true",
             "cleanup=true",
         ]
+        if scid is not None:
+            # Official scrcpy uses an eight-digit hex session id to isolate the
+            # device-side local socket for concurrent and rapidly restarted clients.
+            args.insert(0, f"scid={scid:08x}")
+        return args
 
 
-@dataclass
+@dataclass(eq=False, slots=True)
 class _Subscriber:
+    """One viewer, identity-hashed so it can live in the subscriber set."""
+
     queue: asyncio.Queue[VideoPacket]
     dropped: int = 0
 
@@ -128,7 +136,7 @@ class ScrcpySession:
         serial: str,
         *,
         config: ScrcpyConfig | None = None,
-        on_rotation: "asyncio.Queue[Rotation] | None" = None,
+        on_rotation: asyncio.Queue[Rotation] | None = None,
     ) -> None:
         self._adb = adb
         self._serial = serial
@@ -142,6 +150,7 @@ class ScrcpySession:
         self._subscribers: set[_Subscriber] = set()
         self._relay_task: asyncio.Task[None] | None = None
         self._forward_port: str | None = None
+        self._socket_name: str | None = None
         self._control_lock = asyncio.Lock()
         self.state = ScrcpyState()
 
@@ -157,24 +166,40 @@ class ScrcpySession:
                 f"scrcpy {self._config.scrcpy_version} into vendor/ -- see "
                 "vendor/README.md."
             )
-        try:
-            await self._adb.push(self._serial, jar, REMOTE_JAR)
-            await self._launch()
-            self._forward_port = await self._adb.forward(
-                self._serial, "tcp:0", f"localabstract:{SOCKET_NAME}"
-            )
-            await self._connect_sockets()
-        except (AdbError, OSError) as exc:
-            await self.stop()
-            raise ScrcpyStartupError(f"could not start scrcpy on {self._serial}: {exc}") from exc
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                scid = secrets.randbelow(0x7FFF_FFFF)
+                self._socket_name = f"{SOCKET_NAME_PREFIX}{scid:08x}"
+                await self._adb.push(self._serial, jar, REMOTE_JAR)
+                # The adb tunnel must exist before the device server starts.
+                # Otherwise a host TCP connect can be accepted by adb while the
+                # device-side local socket does not exist yet, producing an
+                # immediate EOF instead of the readiness dummy byte.
+                self._forward_port = await self._adb.forward(
+                    self._serial, "tcp:0", f"localabstract:{self._socket_name}"
+                )
+                await self._launch(scid)
+                await self._connect_sockets()
+                self.state.started = True
+                self._relay_task = asyncio.create_task(
+                    self._relay_loop(), name=f"pixelforge-scrcpy-{self._serial}"
+                )
+                await self._await_metadata()
+                return
+            except (AdbError, OSError, EOFError, ScrcpyStartupError) as exc:
+                last_error = exc
+                await self.stop()
+                if attempt == 0:
+                    # After a release, Android may keep the old abstract socket
+                    # alive for a fraction of a second. A new forward can then
+                    # connect to that dying socket and receive no dummy byte.
+                    await asyncio.sleep(0.5)
+        raise ScrcpyStartupError(
+            f"could not start scrcpy on {self._serial}: {last_error}"
+        ) from last_error
 
-        self.state.started = True
-        self._relay_task = asyncio.create_task(
-            self._relay_loop(), name=f"pixelforge-scrcpy-{self._serial}"
-        )
-        await self._await_metadata()
-
-    async def _launch(self) -> None:
+    async def _launch(self, scid: int) -> None:
         argv = self._adb.build_argv(
             [
                 "shell",
@@ -183,7 +208,7 @@ class ScrcpySession:
                 "/",
                 "com.genymobile.scrcpy.Server",
                 self._config.scrcpy_version,
-                *self._config.server_args(),
+                *self._config.server_args(scid=scid),
             ],
             serial=self._serial,
         )
@@ -223,15 +248,36 @@ class ScrcpySession:
         port = int(self._forward_port or 0)
         deadline = asyncio.get_running_loop().time() + self._config.connect_timeout_s
 
-        async def connect() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        async def connect(
+            *, expect_dummy: bool = False
+        ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
             last: Exception | None = None
             while asyncio.get_running_loop().time() < deadline:
                 try:
                     # The forward lives on the adb server's host, not ours.
-                    return await asyncio.open_connection(self._adb.server_host, port)
+                    pair = await asyncio.open_connection(self._adb.server_host, port)
+                    if expect_dummy:
+                        try:
+                            remaining = max(
+                                0.1,
+                                min(1.0, deadline - asyncio.get_running_loop().time()),
+                            )
+                            await asyncio.wait_for(pair[0].readexactly(1), timeout=remaining)
+                        except (EOFError, OSError, TimeoutError) as exc:
+                            # adb forward may accept the host TCP connection
+                            # before the device local socket exists, then close
+                            # it immediately. Treat an empty handshake exactly
+                            # like a connection refusal and try the tunnel again.
+                            last = exc
+                            pair[1].close()
+                            with contextlib.suppress(Exception):
+                                await pair[1].wait_closed()
+                            await asyncio.sleep(0.1)
+                            continue
+                    return pair
                 except OSError as exc:
                     # The forward exists before the server binds, so a refusal
-                    # here is normal for the first few hundred milliseconds.
+                    # or an empty forwarded connection is normal initially.
                     last = exc
                     await asyncio.sleep(0.1)
             raise ScrcpyStartupError(
@@ -241,9 +287,9 @@ class ScrcpySession:
                 + (f" (server said: {self.state.last_error})" if self.state.last_error else "")
             )
 
-        self._video = await connect()
-        # send_dummy_byte: one byte on the first socket means "server is up".
-        await self._video[0].readexactly(1)
+        # send_dummy_byte: one byte on the first socket means the device-side
+        # local server is genuinely accepting, not merely the host adb tunnel.
+        self._video = await connect(expect_dummy=True)
         self._control = await connect()
 
     async def _await_metadata(self) -> None:
@@ -277,6 +323,7 @@ class ScrcpySession:
             with contextlib.suppress(AdbError):
                 await self._adb.forward_remove(self._serial, f"tcp:{self._forward_port}")
             self._forward_port = None
+        self._socket_name = None
 
     # ----------------------------------------------------------------- video
 

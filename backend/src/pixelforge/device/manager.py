@@ -76,7 +76,12 @@ class SessionManager:
         return session
 
     async def open(
-        self, serial: str, props, *, templates_dir: Path | None = None
+        self,
+        serial: str,
+        props,
+        *,
+        adb_serial: str | None = None,
+        templates_dir: Path | None = None,
     ) -> tuple[DeviceSession, SessionStatus]:
         """Open a session, or return the existing one.
 
@@ -90,7 +95,7 @@ class SessionManager:
                 return existing, existing.status()
             session = DeviceSession(
                 self._adb,
-                serial,
+                adb_serial or serial,
                 props,
                 scrcpy_config=self._scrcpy_config,
                 capture_mode=self._capture_mode,

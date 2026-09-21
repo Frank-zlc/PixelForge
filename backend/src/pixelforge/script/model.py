@@ -27,13 +27,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 __all__ = [
     "A11ySelector",
     "Assertion",
     "CoordTarget",
     "DeviceProfile",
+    "ListenerConfig",
     "OcrTarget",
     "OnFail",
     "Project",
@@ -393,6 +394,21 @@ class DeviceFilter(BaseModel):
         return not (self.min_sdk is not None and (sdk_int is None or sdk_int < self.min_sdk))
 
 
+class ListenerConfig(BaseModel):
+    """One passive data source attached to a project session.
+
+    Listener options stay JSON-compatible so third-party listeners can add
+    configuration without changing the core project schema.  The concrete
+    listener remains responsible for validating the options it understands.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
+    enabled: bool = True
+    options: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class Project(BaseModel):
     """One business. Shares the engine with every other project and nothing else."""
 
@@ -405,7 +421,18 @@ class Project(BaseModel):
     scripts: list[Script] = Field(default_factory=list)
     variables: dict[str, str] = Field(default_factory=dict)
     exporters: list[str] = Field(default_factory=lambda: ["pixelforge"])
+    listeners: list[ListenerConfig] = Field(
+        default_factory=lambda: [ListenerConfig(name="logcat")]
+    )
     ocr_language: str = "eng"
+
+    @model_validator(mode="after")
+    def _unique_listener_names(self) -> Project:
+        names = [listener.name for listener in self.listeners]
+        duplicates = {value for value in names if names.count(value) > 1}
+        if duplicates:
+            raise ValueError(f"duplicate listeners: {sorted(duplicates)}")
+        return self
 
     def templates_dir(self, root: Path) -> Path:
         return root / self.id / "templates"

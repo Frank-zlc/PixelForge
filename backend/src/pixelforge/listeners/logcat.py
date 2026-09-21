@@ -47,9 +47,11 @@ class LogcatListener:
         include_tags: tuple[str, ...] = (),
         clear_first: bool = True,
     ) -> None:
+        if min_level not in "VDIWEF":
+            raise ValueError("min_level must be one of V, D, I, W, E or F")
         self._adb = adb
         self._min_level = min_level
-        self._include_tags = include_tags
+        self._include_tags = tuple(include_tags)
         self._clear_first = clear_first
         self._process: asyncio.subprocess.Process | None = None
         self._task: asyncio.Task[None] | None = None
@@ -98,6 +100,7 @@ class LogcatListener:
                 context.bus.emit(
                     EventKind.LOG,
                     message=f"[{level}] {tag}: {message}"[:800],
+                    serial=context.serial,
                     level=level,
                     tag=tag,
                     pid=int(match.group("pid")),
@@ -105,7 +108,7 @@ class LogcatListener:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("logcat listener stopped: %s", exc)
 
     def _keep(self, level: str, tag: str, message: str, package: str | None) -> bool:

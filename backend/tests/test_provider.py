@@ -40,6 +40,10 @@ class FakeAdbServer:
 
     async def stop(self) -> None:
         if self._server is not None:
+            # Python 3.13's Server.wait_closed() also waits for active handlers.
+            # Wake a handler blocked on the outgoing-payload queue before closing
+            # the listening socket, otherwise every fixture teardown hangs.
+            self._queue.put_nowait(None)
             self._server.close()
             await self._server.wait_closed()
 

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["Settings", "get_settings"]
@@ -70,8 +71,22 @@ class Settings(BaseSettings):
     )
     adb_timeout_s: float = Field(default=15.0, gt=0, le=300)
 
+    # --- device source -------------------------------------------------------
+    device_provider: Literal["local", "devicefarmer"] = "local"
+    devicefarmer_url: str | None = None
+    devicefarmer_access_token: SecretStr | None = None
+    devicefarmer_poll_interval_s: float = Field(default=3.0, gt=0, le=300)
+    devicefarmer_verify_ssl: bool = True
+
     # --- storage -------------------------------------------------------------
     data_dir: Path = Field(default=_REPO_ROOT / ".pixelforge")
+    asset_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Directory for standalone cropped PNG assets. Defaults to "
+            "<data_dir>/assets; set PIXELFORGE_ASSET_DIR to choose another root."
+        ),
+    )
 
     # --- leases --------------------------------------------------------------
     lease_ttl_s: float = Field(
@@ -97,15 +112,29 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     log_level: str = "INFO"
 
-    @field_validator("data_dir")
+    @field_validator("data_dir", "asset_dir")
     @classmethod
-    def _expand(cls, value: Path) -> Path:
-        return value.expanduser()
+    def _expand(cls, value: Path | None) -> Path | None:
+        return value.expanduser() if value is not None else None
 
     @field_validator("exporter_plugins")
     @classmethod
     def _expand_all(cls, value: list[Path]) -> list[Path]:
         return [path.expanduser() for path in value]
+
+    @model_validator(mode="after")
+    def _device_provider_configured(self) -> Settings:
+        if self.device_provider == "devicefarmer":
+            if not self.devicefarmer_url:
+                raise ValueError(
+                    "PIXELFORGE_DEVICEFARMER_URL is required for the devicefarmer provider"
+                )
+            if self.devicefarmer_access_token is None:
+                raise ValueError(
+                    "PIXELFORGE_DEVICEFARMER_ACCESS_TOKEN is required for the "
+                    "devicefarmer provider"
+                )
+        return self
 
     @property
     def frontend_dir(self) -> Path | None:
@@ -134,11 +163,15 @@ class Settings(BaseSettings):
         return self.data_dir / "captures"
 
     @property
+    def assets_dir(self) -> Path:
+        return self.asset_dir or self.data_dir / "assets"
+
+    @property
     def vendor_dir(self) -> Path:
         return _REPO_ROOT / "vendor"
 
     def ensure_dirs(self) -> None:
-        for path in (self.data_dir, self.templates_dir, self.captures_dir):
+        for path in (self.data_dir, self.templates_dir, self.captures_dir, self.assets_dir):
             path.mkdir(parents=True, exist_ok=True)
 
 

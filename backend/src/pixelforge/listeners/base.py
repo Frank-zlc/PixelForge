@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from pixelforge.timeline.bus import TimelineBus
 
-__all__ = ["ListenerContext", "Listener"]
+__all__ = ["Listener", "ListenerContext"]
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,6 +18,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from pixelforge.device.lease import LeaseManager
 from pixelforge.device.manager import SessionManager
 from pixelforge.device.scrcpy.control import (
     Action,
@@ -26,7 +27,7 @@ from pixelforge.device.scrcpy.control import (
     encode_text,
     encode_touch,
 )
-from pixelforge.device.lease import LeaseManager
+from pixelforge.ws.subscription import relay_until_disconnect
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["stream"])
@@ -67,18 +68,19 @@ async def screen(websocket: WebSocket, serial: str) -> None:
 
     try:
         async with session.scrcpy.subscribe() as packets:
-            async for packet in packets:
+            async def send(packet) -> None:
                 # One-byte prefix so the client knows whether this is a parameter
                 # set, a keyframe or a delta without parsing NAL headers itself.
                 flags = (0x01 if packet.is_config else 0) | (
                     0x02 if packet.is_keyframe else 0
                 )
                 await websocket.send_bytes(bytes([flags]) + packet.data)
+            await relay_until_disconnect(websocket, packets, send)
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("screen stream failed for %s", serial)
         with contextlib.suppress(Exception):
             await websocket.close(code=1011)
@@ -153,7 +155,7 @@ async def control(websocket: WebSocket, serial: str) -> None:
         return
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("control channel failed for %s", serial)
         with contextlib.suppress(Exception):
             await websocket.close(code=1011)

@@ -83,7 +83,14 @@ class DeviceRegistry:
         # Seed from a one-shot listing so the first HTTP request does not have to
         # wait for the tracker's initial push.
         seeded: dict[str, DeviceState] = {}
-        for device in await self._provider.discover():
+        try:
+            discovered = await self._provider.discover()
+        except Exception:
+            # A remote inventory outage is recoverable: start the watcher with an
+            # empty snapshot so the API/UI still boot and the provider can retry.
+            logger.exception("initial %s device discovery failed", self._provider.name)
+            discovered = []
+        for device in discovered:
             self._upsert(device.serial, device.state)
             seeded[device.serial] = device.state
         self._tasks = [
@@ -103,11 +110,15 @@ class DeviceRegistry:
                 await task
         self._tasks.clear()
         self._entries.clear()
+        await self._provider.close()
 
     # ----------------------------------------------------------------- reads
 
     def list(self) -> list[DeviceView]:
-        return [self._view(entry) for entry in sorted(self._entries.values(), key=lambda e: e.serial)]
+        return [
+            self._view(entry)
+            for entry in sorted(self._entries.values(), key=lambda entry: entry.serial)
+        ]
 
     def get(self, serial: str) -> DeviceView | None:
         entry = self._entries.get(serial)
@@ -117,6 +128,19 @@ class DeviceRegistry:
         """Raw device properties, needed to construct a session's mapper."""
         entry = self._entries.get(serial)
         return entry.props if entry else None
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider.name
+
+    async def acquire(self, serial: str, *, ttl_s: float) -> str:
+        return await self._provider.acquire(serial, ttl_s=ttl_s)
+
+    async def renew(self, serial: str, *, ttl_s: float) -> None:
+        await self._provider.renew(serial, ttl_s=ttl_s)
+
+    async def release(self, serial: str) -> None:
+        await self._provider.release(serial)
 
     def require_usable(self, serial: str) -> DeviceView:
         """Fetch a device that is ready for shell/screencap, or explain why not."""
@@ -153,7 +177,7 @@ class DeviceRegistry:
                 self._apply(event)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - the watcher must never die silently
+        except Exception:  # the watcher must never die silently
             logger.exception("device watch loop crashed")
 
     async def _sweep_loop(self) -> None:
@@ -207,10 +231,10 @@ class DeviceRegistry:
 
     async def _load_props(self, serial: str) -> None:
         try:
-            props = await self._adb.props(serial)
+            props = await self._provider.properties(serial)
         except asyncio.CancelledError:
             raise
-        except AdbError as exc:
+        except (AdbError, RuntimeError) as exc:
             entry = self._entries.get(serial)
             if entry is not None:
                 entry.props_pending = False

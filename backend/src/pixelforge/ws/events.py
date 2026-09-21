@@ -14,6 +14,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from pixelforge.device.registry import DeviceRegistry
+from pixelforge.ws.subscription import relay_until_disconnect
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,19 @@ async def device_events(websocket: WebSocket) -> None:
 
     try:
         async with registry.subscribe() as events:
-            async for event in events:
+            async def send(event) -> None:
                 await websocket.send_json(
                     {
                         "type": event.kind,
                         "device": event.device.model_dump(mode="json"),
                     }
                 )
+            await relay_until_disconnect(websocket, events, send)
     except WebSocketDisconnect:
         return
     except asyncio.CancelledError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("device event stream failed")
         with contextlib.suppress(Exception):
             await websocket.close(code=1011)
