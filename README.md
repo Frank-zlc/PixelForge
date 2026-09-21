@@ -28,20 +28,81 @@
 
 ## 快速开始
 
-```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env        # 按需修改；.env 不入库
+### 0. 前置条件
 
-pixelforge doctor           # 先看缺什么，每项都说明缺了会失去什么
-pixelforge serve
+需要在 Mac mini 或 Linux 上运行，手机通过 USB 连接或无线 adb 连接。
+
+- **macOS**: `brew install android-platform-tools`（adb 必需）
+- **Linux**: `apt install adb` 或 `pacman -S android-tools`
+
+### 1. 克隆与环境配置
+
+```bash
+git clone https://github.com/Frank-zlc/PixelForge.git
+cd PixelForge/backend
+
+# 创建虚拟环境
+python3 -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+# 或 .venv\Scripts\activate  # Windows
+
+# 安装依赖（包括开发依赖）
+pip install -e ".[dev]"
+
+# 复制环境配置（按需修改）
+cp .env.example .env
 ```
 
-打开 <http://127.0.0.1:8420/> 即是 IDE，<http://127.0.0.1:8420/docs> 是 API 文档。
+### 2. 可选依赖安装
 
-其他命令：`pixelforge devices` 列设备、`pixelforge run <项目> <脚本> --device <serial>`
-无头执行（CI 入口，失败返回非零）、`pixelforge export <项目> <脚本> --exporter <名字>`。
+以下四项可选，缺了不阻止启动，只关掉对应功能：
+
+```bash
+# 实时投屏 + 低延迟控制（推荐装）
+# 去 https://github.com/Genymobile/scrcpy/releases 下载对应版本的 scrcpy-server.jar
+# 放在 vendor/scrcpy-server.jar
+
+# 控件选择器（可选）
+# 去 https://github.com/appium/appium-uiautomator2-server/releases 下载 .apk
+# 存到 vendor/ 目录即可
+
+# OCR 定位（可选，macOS 用 brew）
+brew install tesseract tesseract-lang
+# 或 apt install tesseract-ocr
+```
+
+### 3. 诊断 & 启动
+
+```bash
+# 检查缺了什么，每项都会说明缺了会失去什么功能
+pixelforge doctor
+
+# 启动服务（**必须单 worker**）
+pixelforge serve
+
+# 或指定主机和端口
+pixelforge serve --host 0.0.0.0 --port 8420
+
+# 开发模式（代码改动自动重载）
+pixelforge serve --reload
+```
+
+打开浏览器访问：
+- **IDE 界面**: http://127.0.0.1:8420/
+- **API 文档**: http://127.0.0.1:8420/docs
+- **WebSocket 调试**: ws://127.0.0.1:8420/ws/screen
+
+### 4. 设备管理
+
+```bash
+# 列出所有连接的设备
+pixelforge devices
+
+# 手机连着 Mac 热点时，启用无线调试（参见下文）
+pixelforge tcpip --device <serial>
+pixelforge connect 192.168.2.5:5555
+pixelforge disconnect 192.168.2.5:5555
+```
 
 > ⚠️ **只能单 worker 运行。** 设备会话、scrcpy 连接、租约、运行中的脚本都是进程内状态。
 > `--workers N` 会让请求随机落到没有该设备会话的进程上，症状是"能用，但偶尔莫名 409"。
@@ -73,6 +134,237 @@ pixelforge devices                      # 拔掉线，设备仍在
 
 界面上的连接面板做的是同一件事。Android 11+ 也可以跳过第一步，直接用系统
 设置里"无线调试"给出的配对地址。断开用 `pixelforge disconnect <地址>`。
+
+## CLI 命令参考
+
+### `serve` —— 启动 Web 服务
+
+```bash
+pixelforge serve [OPTIONS]
+```
+
+**选项：**
+- `--host <HOST>` — 绑定的主机名（默认 127.0.0.1）
+- `--port <PORT>` — 监听端口（默认 8420）
+- `--reload` — 启用代码热重载（开发用）
+
+**用例：**
+```bash
+# 本机调试
+pixelforge serve
+
+# 监听所有网卡（Docker 或远程访问）
+pixelforge serve --host 0.0.0.0
+
+# 自定义端口
+pixelforge serve --port 9000
+
+# 开发模式（代码改动自动重启）
+pixelforge serve --reload
+```
+
+### `doctor` —— 环境诊断
+
+```bash
+pixelforge doctor
+```
+
+检查并报告：
+- adb 是否可用（缺了禁用全部设备功能）
+- scrcpy-server.jar 是否存在（缺了禁用实时投屏和低延迟控制）
+- tesseract 是否安装（缺了禁用 OCR 定位）
+- uiautomator2 APK 是否存在（缺了禁用控件选择器）
+
+每项缺失都会清楚地说明失去什么功能，但不会阻止服务启动。
+
+### `devices` —— 列出设备
+
+```bash
+pixelforge devices
+```
+
+显示所有已连接的 Android 设备及其状态（device / offline / unauthorized 等）。
+
+### `tcpip` —— USB 转 TCP（启用无线调试）
+
+```bash
+pixelforge tcpip --device <SERIAL> [--port 5555]
+```
+
+**参数：**
+- `--device <SERIAL>` ⭐️（必需）— 目标设备的 adb serial
+- `--port <PORT>` — 目标端口（默认 5555）
+
+**用处：** 将 USB 连接的设备切换到 TCP 模式，通常用于启用无线调试。命令会打印设备的 IP 地址供下一步使用。
+
+**例子：**
+```bash
+# 启用无线调试，显示 IP
+pixelforge tcpip --device a1b2c3d4
+
+# 使用非标准端口
+pixelforge tcpip --device a1b2c3d4 --port 5037
+```
+
+### `connect` —— 连接无线设备
+
+```bash
+pixelforge connect <ADDRESS>
+```
+
+**参数：**
+- `<ADDRESS>` — 无线设备地址，格式 `host:port`（如 `192.168.2.5:5555`）
+
+**用处：** 通过 TCP/IP 连接无线 Android 设备（需要手机和 Mac 在同一网络）。
+
+**例子：**
+```bash
+pixelforge connect 192.168.2.5:5555
+
+# 连接后可用 adb 命令
+adb -s 192.168.2.5:5555 shell getprop ro.product.model
+```
+
+### `disconnect` —— 断开无线设备
+
+```bash
+pixelforge disconnect [ADDRESS]
+```
+
+**参数：**
+- `[ADDRESS]` — 可选，指定地址断开；省略则断开所有无线设备
+
+**例子：**
+```bash
+# 断开特定设备
+pixelforge disconnect 192.168.2.5:5555
+
+# 断开所有无线设备
+pixelforge disconnect
+```
+
+### `run` —— 无头执行脚本（CI 入口）
+
+```bash
+pixelforge run <PROJECT> <SCRIPT> --device <SERIAL> [OPTIONS]
+```
+
+**参数：**
+- `<PROJECT>` — 项目目录名
+- `<SCRIPT>` — 脚本文件名（不含 `.json` 扩展）
+- `--device <SERIAL>` ⭐️（必需）— 目标设备 serial
+
+**选项：**
+- `--var KEY=VALUE` — 传递变量给脚本（可重复）
+- `--json` — 以 JSON 格式输出执行结果
+
+**返回：** 成功返回 0，失败返回非零（可用于 CI 流程）
+
+**例子：**
+```bash
+# 基础执行
+pixelforge run my_project test_login --device a1b2c3d4
+
+# 带变量
+pixelforge run my_project test_checkout --device a1b2c3d4 \
+  --var username=testuser \
+  --var password=testpass123
+
+# JSON 输出（用于 CI 解析）
+pixelforge run my_project ci_flow --device a1b2c3d4 --json
+```
+
+### `export` —— 导出脚本
+
+```bash
+pixelforge export <PROJECT> <SCRIPT> [--exporter <NAME>] [--out <FILE>]
+```
+
+**参数：**
+- `<PROJECT>` — 项目目录名
+- `<SCRIPT>` — 脚本文件名（不含 `.json` 扩展）
+
+**选项：**
+- `--exporter <NAME>` — 导出格式（默认 `pixelforge`，可选 `pytest`）
+- `--out <FILE>` — 输出文件路径（默认输出到 stdout）
+
+**例子：**
+```bash
+# 导出为 pixelforge 格式（Native）
+pixelforge export my_project test_flow --out test_flow.pf.json
+
+# 导出为 pytest 格式（可直接用 pytest 运行）
+pixelforge export my_project test_flow --exporter pytest --out test_flow_test.py
+
+# 打印到控制台
+pixelforge export my_project test_flow --exporter pytest
+```
+
+### `exporters` —— 列出可用导出器
+
+```bash
+pixelforge exporters
+```
+
+显示所有已注册的导出器及其描述。内置 `pixelforge` 和 `pytest`，可通过插件扩展（见下文）。
+
+## 环境变量
+
+创建 `.env` 文件或设置环境变量来自定义配置：
+
+```bash
+# adb 可执行文件路径（默认用 PATH 中的 adb）
+PIXELFORGE_ADB_EXECUTABLE=/opt/android-sdk/platform-tools/adb
+
+# adb server 主机（容器化部署时用，默认 127.0.0.1）
+PIXELFORGE_ADB_SERVER_HOST=host.docker.internal
+
+# adb server 端口（默认 5037）
+PIXELFORGE_ADB_SERVER_PORT=5037
+
+# adb 命令超时（秒，默认 15）
+PIXELFORGE_ADB_TIMEOUT_S=30
+
+# 数据目录（项目、模板、截图，默认 .pixelforge/）
+PIXELFORGE_DATA_DIR=~/.pixelforge
+
+# 租约过期时间（秒，默认 30）
+PIXELFORGE_LEASE_TTL_S=60
+
+# 导出插件目录（多个用 : 分隔）
+PIXELFORGE_EXPORTER_PLUGINS=/path/to/plugins1:/path/to/plugins2
+
+# Web 服务主机（默认 127.0.0.1）
+PIXELFORGE_HOST=0.0.0.0
+
+# Web 服务端口（默认 8420）
+PIXELFORGE_PORT=9000
+
+# CORS 源地址（默认 http://localhost:5173）
+PIXELFORGE_CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+
+# 前端目录（默认自动搜索 frontend/）
+PIXELFORGE_FRONTEND_DIR=~/my-frontend-build
+
+# 日志级别（DEBUG / INFO / WARNING / ERROR）
+PIXELFORGE_LOG_LEVEL=DEBUG
+```
+
+**例子：**
+```bash
+# 编写 .env 文件
+cat > backend/.env <<EOF
+PIXELFORGE_HOST=0.0.0.0
+PIXELFORGE_PORT=8080
+PIXELFORGE_LOG_LEVEL=DEBUG
+PIXELFORGE_ADB_SERVER_HOST=192.168.1.100
+EOF
+
+# 或直接设置环境变量
+export PIXELFORGE_PORT=8080
+export PIXELFORGE_ADB_SERVER_HOST=192.168.1.100
+pixelforge serve
+```
 
 ### 部署形态
 
