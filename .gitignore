@@ -216,3 +216,51 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# PixelForge
+# ---------------------------------------------------------------------------
+# 与 vendor/ 二进制相关的规则在 backend/.gitignore —— 就放在它们旁边。
+
+# 运行时数据目录（PIXELFORGE_DATA_DIR，默认 backend/.pixelforge）。
+# 项目定义、脚本、模板、截图都落在这里：是用户数据，不是源码。
+.pixelforge/
+pixelforge-data/
+
+# 设备侧临时产物
+window_dump.xml
+pf-dump.xml
+*.apk.idsig
+
+# 真实配置不入库（.env 已被上面的 Environments 段覆盖），样例保留
+!.env.example
+
+# 前端是零构建的，不该出现 node_modules；但 node 会被
+# test_frontend_parity.py 调用，所以万一有人装了依赖也别提交。
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS —— 不加这条，Finder 会往每个目录塞 .DS_Store
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# 本地草稿
+*.orig
+*.rej
+scratch/
+.local/

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelForge</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+
+  <section class="pane pane--devices">
+    <h1>设备</h1>
+    <div class="row" style="margin-bottom:10px">
+      <button id="refresh-devices" class="grow">刷新</button>
+    </div>
+    <div id="device-list"></div>
+    <div id="health" class="kv" style="margin-top:14px"></div>
+  </section>
+
+  <section class="pane pane--stage">
+    <div class="toolbar">
+      <span id="session-state" class="pill">未连接</span>
+      <button id="connect" class="primary" disabled>获取设备</button>
+      <button id="release" disabled>释放</button>
+      <span class="grow"></span>
+      <label class="row" style="gap:4px">
+        <input type="checkbox" id="mode-tap" checked style="width:auto"> 点击设备
+      </label>
+      <label class="row" style="gap:4px">
+        <input type="checkbox" id="mode-select" style="width:auto"> 框选取材
+      </label>
+      <button id="key-back" disabled>返回</button>
+      <button id="key-home" disabled>主页</button>
+      <button id="diagnose" disabled>诊断黑屏</button>
+    </div>
+    <div class="stage-body">
+      <div class="stage-wrap">
+        <canvas id="screen" width="1080" height="2400"></canvas>
+      </div>
+      <canvas id="overlay"></canvas>
+      <div id="readout" class="readout" hidden></div>
+      <div id="stage-banner" class="banner" hidden></div>
+      <div id="stage-empty" class="empty">选择一台设备并点击「获取设备」</div>
+    </div>
+  </section>
+
+  <section class="pane pane--inspector">
+    <h2>坐标 / 控件</h2>
+    <div id="point-info" class="kv"><div class="muted">在画面上移动或点击</div></div>
+
+    <h2>取材</h2>
+    <div class="row" style="gap:6px;margin-bottom:6px">
+      <input id="template-name" placeholder="模板名（字母数字-_）" class="grow">
+      <button id="save-template" disabled>保存框选</button>
+    </div>
+    <div id="template-result" class="kv"></div>
+
+    <h2>控件树</h2>
+    <div class="row" style="margin-bottom:6px">
+      <button id="load-hierarchy" disabled class="grow">读取控件树</button>
+    </div>
+    <ul id="node-list" class="node-list"></ul>
+
+    <h2>项目 / 脚本</h2>
+    <div class="row" style="gap:6px;margin-bottom:6px">
+      <select id="project-select" class="grow"></select>
+      <button id="new-project">新建</button>
+    </div>
+    <div class="row" style="gap:6px;margin-bottom:8px">
+      <select id="script-select" class="grow"></select>
+      <button id="new-script">新建</button>
+    </div>
+    <ul id="step-list" class="step-list"></ul>
+    <div class="row" style="gap:6px;margin-top:6px">
+      <button id="add-tap-step" disabled class="grow">把当前点加为 tap 步骤</button>
+    </div>
+    <div class="row" style="gap:6px;margin-top:6px">
+      <button id="run-script" disabled>运行</button>
+      <button id="pause-run" disabled>暂停</button>
+      <button id="resume-run" disabled>继续</button>
+      <button id="stop-run" disabled>停止</button>
+    </div>
+    <div class="row" style="gap:6px;margin-top:6px">
+      <select id="exporter-select" class="grow"></select>
+      <button id="export-script">导出</button>
+    </div>
+    <div id="export-result" class="kv"></div>
+  </section>
+
+  <section class="pane pane--timeline">
+    <div class="timeline-head">
+      <strong>时间线</strong>
+      <span id="run-state" class="pill">无运行</span>
+      <span class="grow"></span>
+      <label class="row" style="gap:4px">
+        <input type="checkbox" id="follow-timeline" checked style="width:auto"> 自动滚动
+      </label>
+      <button id="clear-timeline">清空</button>
+    </div>
+    <div id="timeline" class="timeline-body"></div>
+  </section>
+
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
