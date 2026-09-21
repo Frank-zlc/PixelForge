@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -44,6 +45,9 @@ __all__ = [
 ]
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+# host:port for wireless adb. Hostnames allowed as well as literal IPv4.
+_ADDRESS_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}:\d{1,5}$")
+_IPV4_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 
 
 class AdbError(RuntimeError):
@@ -239,6 +243,59 @@ class AdbClient:
 
     async def version(self) -> str:
         return (await self.run_text(["version"])).strip()
+
+    # -------------------------------------------------------------- wireless
+
+    async def connect(self, address: str) -> str:
+        """Attach a device over TCP/IP (``adb connect host:port``).
+
+        Useful whenever USB is the problem rather than the solution: a phone that
+        keeps dropping off the bus, a USB mode that got switched to charge-only,
+        or -- the common case here -- a phone already on the machine's hotspot for
+        packet capture, where the same link can carry adb and sidestep USB
+        entirely.
+
+        Requires ``adb tcpip`` to have been run on the device once over USB, or
+        wireless debugging to be enabled in developer options.
+        """
+        if not _ADDRESS_RE.fullmatch(address):
+            raise ValueError(
+                f"invalid address {address!r}: expected host:port, e.g. 192.168.2.5:5555"
+            )
+        out = (await self.run_text(["connect", address], timeout=20)).strip()
+        lowered = out.lower()
+        # adb reports failure on stdout with a zero exit status, so the text is
+        # the only signal there is.
+        if "connected to" not in lowered or lowered.startswith(("failed", "cannot", "unable")):
+            raise AdbError(out or f"could not connect to {address}")
+        return out
+
+    async def disconnect(self, address: str | None = None) -> str:
+        args = ["disconnect"] + ([address] if address else [])
+        return (await self.run_text(args, timeout=20)).strip()
+
+    async def tcpip(self, serial: str, port: int = 5555) -> str:
+        """Restart the device's adbd in TCP mode, so it can be reached wirelessly.
+
+        Must run over USB -- this is the one step that still needs the cable.
+        Afterwards the cable can go and :meth:`connect` takes over.
+        """
+        if not 1024 <= port <= 65535:
+            raise ValueError("tcpip port must be between 1024 and 65535")
+        return (await self.run_text(["tcpip", str(port)], serial=serial, timeout=20)).strip()
+
+    async def device_ip(self, serial: str) -> str | None:
+        """Best-effort wlan0 address, so the UI can pre-fill the connect box."""
+        for command in (["ip", "-f", "inet", "addr", "show", "wlan0"],
+                        ["ifconfig", "wlan0"]):
+            try:
+                out = await self.shell(serial, command, timeout=10)
+            except AdbError:
+                continue
+            match = _IPV4_RE.search(out)
+            if match:
+                return match.group(1)
+        return None
 
     # --------------------------------------------------------------- devices
 

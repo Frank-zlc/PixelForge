@@ -72,10 +72,14 @@ class DeviceProvider(Protocol):
         """One-shot listing of currently visible devices."""
         ...
 
-    def watch(self) -> AsyncIterator[DeviceEvent]:
+    def watch(
+        self, known: dict[str, DeviceState] | None = None
+    ) -> AsyncIterator[DeviceEvent]:
         """Yield events as devices appear, disappear or change state.
 
-        Should run until cancelled, reconnecting internally on transport loss.
+        ``known`` seeds the diff with what the caller already believes is
+        attached, so the first snapshot can retire anything stale. Should run
+        until cancelled, reconnecting internally on transport loss.
         """
         ...
 
@@ -109,13 +113,21 @@ class LocalAdbProvider:
     async def adb_endpoint(self, serial: str) -> str:
         return serial
 
-    async def watch(self) -> AsyncIterator[DeviceEvent]:
+    async def watch(
+        self, known: dict[str, DeviceState] | None = None
+    ) -> AsyncIterator[DeviceEvent]:
         """Track devices, diffing successive snapshots into events.
 
         ``host:track-devices`` pushes a full list each time anything changes, so
         the diffing happens here rather than on the wire.
+
+        ``known`` seeds the diff with what the caller already believes is
+        attached. Starting from empty instead leaves a gap: anything the initial
+        ``discover()`` found but the stream does not report is never diffed away,
+        so it lingers in the UI forever. That is how a phantom entry survives
+        even after the thing that produced it is gone.
         """
-        known: dict[str, DeviceState] = {}
+        known = dict(known or {})
         delay = _RECONNECT_MIN_S
         first_attempt = True
 

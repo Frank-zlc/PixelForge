@@ -92,6 +92,47 @@ class TestParseDeviceList:
         payload = "* daemon started successfully *\nABC123\tdevice\n"
         assert len(parse_device_list(payload)) == 1
 
+    def test_cli_header_is_not_a_device(self) -> None:
+        """Regression: a phantom device called "List" in the UI.
+
+        `adb devices` prints "List of devices attached"; the track-devices stream
+        does not. Parsed as a device line, "List" clears the serial pattern and
+        "of devices attached" degrades to UNKNOWN, so the header showed up in the
+        device list beside the real phone.
+        """
+        payload = "List of devices attached\na5b132b4\tdevice\n\n"
+        assert parse_device_list(payload) == [
+            TrackedDevice("a5b132b4", DeviceState.DEVICE)
+        ]
+
+    def test_header_only_means_no_devices(self) -> None:
+        assert parse_device_list("List of devices attached\n\n") == []
+
+    def test_long_format_qualifiers_do_not_corrupt_the_state(self) -> None:
+        """Regression: `adb devices -l` made a healthy phone read as UNKNOWN.
+
+        The long format appends product/model/transport_id after the state.
+        Joining everything after the serial turned "device product:picasso ..."
+        into an unrecognised state.
+        """
+        payload = (
+            "List of devices attached\n"
+            "a5b132b4          device product:picasso model:Redmi_K30_5G transport_id:3\n"
+        )
+        (device,) = parse_device_list(payload)
+        assert device.serial == "a5b132b4"
+        assert device.state is DeviceState.DEVICE
+        assert device.usable
+
+    def test_header_with_daemon_chatter(self) -> None:
+        payload = (
+            "* daemon not running; starting now at tcp:5038 *\n"
+            "* daemon started successfully *\n"
+            "List of devices attached\n"
+            "a5b132b4\tdevice\n"
+        )
+        assert [d.serial for d in parse_device_list(payload)] == ["a5b132b4"]
+
     def test_unknown_state_degrades(self) -> None:
         # adb grows states over time; an unknown one must not take the registry down.
         assert parse_device_list("ABC\tsomethingnew")[0].state is DeviceState.UNKNOWN

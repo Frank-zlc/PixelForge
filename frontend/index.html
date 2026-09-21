@@ -17,6 +17,21 @@
       <button id="refresh-devices" class="grow">刷新</button>
     </div>
     <div id="device-list"></div>
+
+    <h2>无线连接</h2>
+    <p class="muted" style="font-size:12px;margin:0 0 6px">
+      手机已在本机热点上时，走无线 adb 可以绕开 USB 掉线与 USB 模式被切走的问题。
+      首次需要先用数据线执行一次「转无线」。
+    </p>
+    <div class="row" style="gap:6px;margin-bottom:6px">
+      <input id="wireless-address" placeholder="192.168.2.5:5555" class="grow">
+      <button id="wireless-connect">连接</button>
+    </div>
+    <div class="row" style="gap:6px">
+      <button id="wireless-tcpip" class="grow" disabled>把选中的 USB 设备转为无线</button>
+    </div>
+    <div id="wireless-result" class="kv" style="margin-top:6px"></div>
+
     <div id="health" class="kv" style="margin-top:14px"></div>
   </section>
 

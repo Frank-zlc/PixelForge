@@ -80,7 +80,11 @@ function selectDevice(serial) {
   state.selected = serial;
   renderDevices();
   const device = state.devices.find((d) => d.serial === serial);
-  $('connect').disabled = !device || device.state !== 'device';
+  const ready = Boolean(device) && device.state === 'device';
+  $('connect').disabled = !ready;
+  // A serial that already looks like host:port is wireless; switching it again
+  // would be a no-op at best.
+  $('wireless-tcpip').disabled = !ready || /:\d+$/.test(serial);
 }
 
 // ---------------------------------------------------------------- session
@@ -853,6 +857,47 @@ function escapeHtml(value) {
 function slug(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'item';
 }
+
+// ---------------------------------------------------------------- wireless
+
+$('wireless-connect').onclick = async () => {
+  const address = $('wireless-address').value.trim();
+  if (!address) {
+    toast('填一个 host:port，例如 192.168.2.5:5555');
+    return;
+  }
+  $('wireless-result').innerHTML = '<div class="muted">连接中…</div>';
+  try {
+    const result = await api.connectWireless(address);
+    // The tracker picks the device up on its own; no refresh needed, but doing
+    // it makes the list update feel immediate rather than a beat later.
+    $('wireless-result').innerHTML = `<div><span>已连接</span><span>${escapeHtml(result.address)}</span></div>`;
+    loadDevices();
+  } catch (error) {
+    $('wireless-result').innerHTML = `<div class="note">${escapeHtml(error.message)}</div>`;
+  }
+};
+
+$('wireless-tcpip').onclick = async () => {
+  if (!state.selected) return;
+  $('wireless-result').innerHTML = '<div class="muted">切换中…</div>';
+  try {
+    const result = await api.enableTcpip(state.selected);
+    if (result.suggested_address) {
+      // Pre-fill so the address does not have to be hunted down in Settings.
+      $('wireless-address').value = result.suggested_address;
+      $('wireless-result').innerHTML =
+        `<div><span>已转无线</span><span>${escapeHtml(result.suggested_address)}</span></div>` +
+        '<div class="muted" style="font-size:12px">数据线可以拔了，然后点「连接」。</div>';
+    } else {
+      $('wireless-result').innerHTML =
+        `<div class="note">已切到 TCP 模式（端口 ${result.port}），但读不到手机的 wlan0 地址。` +
+        '请在「设置 → 关于手机 → 状态」里找到 IP 后手动填入。</div>';
+    }
+  } catch (error) {
+    $('wireless-result').innerHTML = `<div class="note">${escapeHtml(error.message)}</div>`;
+  }
+};
 
 $('refresh-devices').onclick = loadDevices;
 $('connect').onclick = () => connect(false);

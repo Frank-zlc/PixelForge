@@ -16,7 +16,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field
 
-from pixelforge.api.deps import LeasesDep, RegistryDep, SessionsDep, StoreDep
+from pixelforge.adb.client import AdbError
+from pixelforge.api.deps import AdbDep, LeasesDep, RegistryDep, SessionsDep, StoreDep
 from pixelforge.device.lease import (
     DeviceBusyError,
     LeaseError,
@@ -60,6 +61,70 @@ class SessionResponse(BaseModel):
 
 class RenewRequest(BaseModel):
     token: str = Field(min_length=1, max_length=64)
+
+
+class ConnectRequest(BaseModel):
+    address: str = Field(
+        min_length=3,
+        max_length=259,
+        description="host:port, e.g. 192.168.2.5:5555",
+    )
+
+
+class TcpipRequest(BaseModel):
+    port: int = Field(default=5555, ge=1024, le=65535)
+
+
+@router.post("/connect")
+async def connect_wireless(body: ConnectRequest, adb: AdbDep) -> dict[str, object]:
+    """Attach a device over TCP/IP.
+
+    The practical use: a phone already on this machine's hotspot can be driven
+    over that same link, which sidesteps USB entirely -- handy when the cable
+    keeps dropping or the phone's USB mode gets switched away from debugging.
+    The tracker picks the device up on its own once adb has it.
+    """
+    try:
+        message = await adb.connect(body.address)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except AdbError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"{exc}. Check the phone is reachable at that address and that "
+            "wireless debugging (or `adb tcpip`) is enabled on it.",
+        ) from exc
+    return {"address": body.address, "message": message}
+
+
+@router.post("/disconnect")
+async def disconnect_wireless(body: ConnectRequest, adb: AdbDep) -> dict[str, object]:
+    return {"message": await adb.disconnect(body.address)}
+
+
+@router.post("/{serial}/tcpip")
+async def enable_tcpip(
+    serial: str, body: TcpipRequest, registry: RegistryDep, adb: AdbDep
+) -> dict[str, object]:
+    """Switch a USB-attached device to TCP mode and report where to reach it.
+
+    This is the one step that still needs the cable; afterwards it can go.
+    """
+    device = registry.get(serial)
+    if device is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown device: {serial}")
+    try:
+        message = await adb.tcpip(serial, body.port)
+        address = await adb.device_ip(serial)
+    except AdbError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return {
+        "message": message,
+        "port": body.port,
+        "device_ip": address,
+        # Pre-filled so the user does not have to go hunting in Settings.
+        "suggested_address": f"{address}:{body.port}" if address else None,
+    }
 
 
 @router.get("", response_model=list[DeviceView])

@@ -43,6 +43,9 @@ _SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 
 _WM_SIZE_RE = re.compile(r"(?:Override|Physical) size:\s*(\d+)x(\d+)")
 
+# `adb devices` prints a header that the track-devices stream does not.
+_CLI_HEADERS = ("list of devices attached", "list of devices")
+
 
 class AdbProtocolError(RuntimeError):
     """The adb server sent something that does not match the host protocol."""
@@ -126,25 +129,47 @@ def parse_length_prefix(raw: bytes) -> int:
 
 
 def parse_device_list(payload: str) -> list[TrackedDevice]:
-    """Parse a ``host:track-devices`` payload into devices.
+    """Parse a device list into devices.
 
-    Each line is ``<serial>\\t<state>``. Blank payloads (no devices attached)
-    yield an empty list. Lines whose serial fails validation are dropped rather
-    than raising: one malformed entry must not blind the registry to the rest.
+    Three input shapes reach this function and all three have bitten:
+
+    * ``host:track-devices`` pushes bare ``<serial>\\t<state>`` lines.
+    * ``adb devices`` prefixes them with a "List of devices attached" header.
+      Left in, that header parses as a device -- "List" clears the serial
+      pattern and "of devices attached" degrades to UNKNOWN -- so a phantom
+      device named "List" appears in the UI beside the real ones.
+    * ``adb devices -l`` appends ``product:`` / ``model:`` / ``transport_id:``
+      qualifiers. Joining everything after the serial into the state turns
+      ``device product:picasso model:Redmi_K30_5G`` into UNKNOWN, which makes a
+      perfectly healthy phone look unusable.
+
+    So the state is the *second field only*, with one exception: adb reports
+    permission trouble as the multi-word "no permissions; see [url]", which is
+    worth preserving because the fix (udev rules, or the RSA prompt) is specific.
+
+    Blank payloads (no devices attached) yield an empty list. Lines whose serial
+    fails validation are dropped rather than raising: one malformed entry must
+    not blind the registry to the rest.
     """
     devices: list[TrackedDevice] = []
     for raw_line in payload.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("*"):
             continue
-        # Real adb uses a tab, but some proxies emit spaces. Split on any run
-        # of whitespace and keep only the first two fields.
+        if line.lower().rstrip(":").startswith(_CLI_HEADERS):
+            continue
+        # Real adb uses a tab, but some proxies emit spaces; split on any run of
+        # whitespace so both work.
         parts = line.split()
         if len(parts) < 2:
             continue
-        serial, state_text = parts[0], " ".join(parts[1:])
+        serial = parts[0]
         if not is_valid_serial(serial):
             continue
+        remainder = " ".join(parts[1:])
+        state_text = (
+            remainder if remainder.lower().startswith("no permissions") else parts[1]
+        )
         devices.append(TrackedDevice(serial=serial, state=DeviceState.parse(state_text)))
     return devices
 

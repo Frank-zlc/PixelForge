@@ -41,6 +41,20 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="report which optional capabilities are available")
     sub.add_parser("devices", help="list attached devices")
 
+    connect = sub.add_parser(
+        "connect", help="attach a device over TCP/IP (wireless adb)"
+    )
+    connect.add_argument("address", help="host:port, e.g. 192.168.2.5:5555")
+
+    disconnect = sub.add_parser("disconnect", help="detach a wireless device")
+    disconnect.add_argument("address", nargs="?", help="omit to detach all")
+
+    tcpip = sub.add_parser(
+        "tcpip", help="switch a USB device to TCP mode, then report its address"
+    )
+    tcpip.add_argument("--device", required=True, help="adb serial (over USB)")
+    tcpip.add_argument("--port", type=int, default=5555)
+
     run = sub.add_parser("run", help="run a script headlessly (the CI entry point)")
     run.add_argument("project")
     run.add_argument("script")
@@ -65,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
         "serve": _serve,
         "doctor": _doctor,
         "devices": _devices,
+        "connect": _connect,
+        "disconnect": _disconnect,
+        "tcpip": _tcpip,
         "run": _run,
         "export": _export,
         "exporters": _exporters,
@@ -199,6 +216,71 @@ def _devices(args: argparse.Namespace, settings: Settings) -> int:
         return 0
 
     return asyncio.run(collect())
+
+
+# ------------------------------------------------------------------ wireless
+
+
+def _adb(settings: Settings) -> AdbClient:
+    return AdbClient(
+        settings.adb_executable,
+        server_host=settings.adb_server_host,
+        server_port=settings.adb_server_port,
+        timeout=settings.adb_timeout_s,
+    )
+
+
+def _connect(args: argparse.Namespace, settings: Settings) -> int:
+    async def go() -> int:
+        try:
+            print(f"  {await _adb(settings).connect(args.address)}")
+        except (ValueError, AdbError, AdbNotFoundError) as exc:
+            print(f"{exc}", file=sys.stderr)
+            print(
+                "Check the phone is reachable at that address, and that wireless "
+                "debugging is on (or run `pixelforge tcpip --device <serial>` once "
+                "over USB first).",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    return asyncio.run(go())
+
+
+def _disconnect(args: argparse.Namespace, settings: Settings) -> int:
+    async def go() -> int:
+        try:
+            out = await _adb(settings).disconnect(args.address)
+        except (AdbError, AdbNotFoundError) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+        print(f"  {out or 'disconnected'}")
+        return 0
+
+    return asyncio.run(go())
+
+
+def _tcpip(args: argparse.Namespace, settings: Settings) -> int:
+    async def go() -> int:
+        adb = _adb(settings)
+        try:
+            print(f"  {await adb.tcpip(args.device, args.port)}")
+            ip = await adb.device_ip(args.device)
+        except (ValueError, AdbError, AdbNotFoundError) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+        if ip:
+            print(f"  the cable can go now:  pixelforge connect {ip}:{args.port}")
+        else:
+            print(
+                "  could not read the device's wlan0 address; find it under "
+                "Settings > About > Status and run `pixelforge connect <ip>:"
+                f"{args.port}`"
+            )
+        return 0
+
+    return asyncio.run(go())
 
 
 # ----------------------------------------------------------------------- run

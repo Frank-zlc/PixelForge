@@ -48,6 +48,11 @@ export const api = {
   sessionStatus: (serial) =>
     request('GET', `/api/devices/${encodeURIComponent(serial)}/session/status`),
 
+  connectWireless: (address) => request('POST', '/api/devices/connect', { address }),
+  disconnectWireless: (address) => request('POST', '/api/devices/disconnect', { address }),
+  enableTcpip: (serial, port = 5555) =>
+    request('POST', `/api/devices/${encodeURIComponent(serial)}/tcpip`, { port }),
+
   point: (serial, body) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/point`, body),
   crop: (serial, body) =>

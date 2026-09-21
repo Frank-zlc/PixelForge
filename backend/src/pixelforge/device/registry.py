@@ -82,10 +82,12 @@ class DeviceRegistry:
         self._started = True
         # Seed from a one-shot listing so the first HTTP request does not have to
         # wait for the tracker's initial push.
+        seeded: dict[str, DeviceState] = {}
         for device in await self._provider.discover():
             self._upsert(device.serial, device.state)
+            seeded[device.serial] = device.state
         self._tasks = [
-            asyncio.create_task(self._watch_loop(), name="pixelforge-device-watch"),
+            asyncio.create_task(self._watch_loop(seeded), name="pixelforge-device-watch"),
             asyncio.create_task(self._sweep_loop(), name="pixelforge-lease-sweep"),
         ]
 
@@ -144,9 +146,10 @@ class DeviceRegistry:
 
     # --------------------------------------------------------------- private
 
-    async def _watch_loop(self) -> None:
+    async def _watch_loop(self, seeded: dict[str, DeviceState] | None = None) -> None:
+        """Feed the seed into the tracker so its first diff can retire stale entries."""
         try:
-            async for event in self._provider.watch():
+            async for event in self._provider.watch(seeded):
                 self._apply(event)
         except asyncio.CancelledError:
             raise
