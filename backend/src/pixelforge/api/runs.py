@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, HTTPException, status
@@ -57,7 +58,22 @@ class ActiveRun:
 
 # Runs live in process alongside the device sessions they drive -- the same reason
 # the server must stay single-worker.
-_RUNS: dict[str, ActiveRun] = {}
+#
+# Bounded, because a long-lived server would otherwise accumulate every run it has
+# ever executed along with each one's Debugger and result. Only *finished* runs are
+# evicted; an in-flight run is never dropped out from under its poller.
+_MAX_REMEMBERED_RUNS = 100
+_RUNS: OrderedDict[str, ActiveRun] = OrderedDict()
+
+
+def _evict_finished_runs() -> None:
+    while len(_RUNS) > _MAX_REMEMBERED_RUNS:
+        for run_id, active in _RUNS.items():
+            if active.task.done():
+                del _RUNS[run_id]
+                break
+        else:
+            return  # everything still running: keep them all
 
 
 class StartRunRequest(BaseModel):
@@ -122,6 +138,7 @@ async def start_run(
         task=task,
     )
     _RUNS[run_id] = active
+    _evict_finished_runs()
 
     def _store_result(finished: asyncio.Task[RunResult]) -> None:
         with contextlib.suppress(asyncio.CancelledError, Exception):

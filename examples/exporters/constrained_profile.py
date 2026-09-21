@@ -1,19 +1,22 @@
-"""Export to AlbionHelper's ``WorkflowProfiles`` JSON.
+"""Example plugin: downgrade to a constrained step profile.
 
-The first downstream consumer, and a deliberate demonstration that the Exporter
-seam works: AlbionHelper is a *consumer* of PixelForge, never a dependency of it.
-PixelForge imports nothing from it -- this module encodes its schema as data, so
-the coupling is a format, not an import.
+Copy this, adjust the constants to your engine's conventions, and drop it in a
+directory named by ``PIXELFORGE_EXPORTER_PLUGINS``.
 
-That schema is narrower than PixelForge's on purpose (it validates with
-``extra="forbid"`` and a fixed action enum, because the profiles are dispatched to
-edge nodes and must not be able to carry arbitrary behaviour). It supports six
-actions, OCR-only text waiting, and normalised coordinates -- no swipes, no
-assertions, no accessibility selectors, no image matching.
+The target format here is a shape that turns up a lot in practice, for good
+reasons: a profile dispatched to edge nodes should not be able to carry arbitrary
+behaviour, so it is locked down to a fixed action enum with ``extra="forbid"``
+validation. Six actions, normalised coordinates only, OCR-only text waiting,
+unique step names, at most 30 steps.
 
-Each of those gaps produces a warning naming the step and the options, which
-doubles as the list of what AlbionHelper would have to grow to accept the script
-unchanged.
+What that costs is expressiveness, and the whole point of this file is what it
+does about that: **every downgrade produces a warning naming the step, what could
+not be represented, and the options**. An exporter that silently dropped an
+assertion would produce a script that passes in the IDE and quietly does less in
+production, which is the worst available failure -- nothing looks wrong.
+
+The warnings are useful in the other direction too: they are a list of what the
+target engine would have to grow to accept the flow unchanged.
 """
 
 from __future__ import annotations
@@ -30,10 +33,9 @@ from pixelforge.script.model import (
     Strategy,
 )
 
-__all__ = ["AlbionHelperExporter"]
+# --- adjust these to your engine -------------------------------------------
 
-# AlbionHelper's WorkflowProfileStep action enum.
-_SUPPORTED = {
+_ACTION_MAP = {
     StepAction.LAUNCH_APP: "launch",
     StepAction.TAP: "tap",
     StepAction.KEY: "keyevent",
@@ -43,13 +45,17 @@ _SUPPORTED = {
 }
 _MAX_STEPS = 30
 _MAX_NAME = 100
-# Its `workflow` field is a Literal, so an arbitrary name is rejected on load.
-_KNOWN_WORKFLOWS = ("login-monitor", "open-market-query")
+_MAX_KEYCODE = 999
+# Some engines pin the profile name to a Literal, so an arbitrary script id is
+# rejected at load time. Set to () if yours accepts any name.
+_WORKFLOW_NAMES: tuple[str, ...] = ("login-monitor", "open-market-query")
+
+# ---------------------------------------------------------------------------
 
 
-class AlbionHelperExporter:
-    name = "albionhelper"
-    description = "AlbionHelper WorkflowProfiles JSON (lossy -- warnings explain what)"
+class ConstrainedProfileExporter:
+    name = "constrained-profile"
+    description = "Constrained step profile (lossy -- warnings explain what)"
 
     def export(self, project: Project, script: Script) -> ExportResult:
         warnings: list[ExportWarning] = []
@@ -60,19 +66,20 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     None,
-                    "AlbionHelper profiles require package_name and the project has none",
+                    "the profile requires a package name and the project has none",
                     "set the project's app_package before exporting",
                 )
             )
             package = "com.example.app"
 
-        workflow = script.id if script.id in _KNOWN_WORKFLOWS else _KNOWN_WORKFLOWS[0]
-        if script.id not in _KNOWN_WORKFLOWS:
+        workflow = script.id
+        if _WORKFLOW_NAMES and script.id not in _WORKFLOW_NAMES:
+            workflow = _WORKFLOW_NAMES[0]
             warnings.append(
                 ExportWarning(
                     None,
-                    f"workflow name {script.id!r} is not one AlbionHelper accepts "
-                    f"(its schema pins it to {list(_KNOWN_WORKFLOWS)})",
+                    f"workflow name {script.id!r} is not one the engine accepts "
+                    f"(it pins the field to {list(_WORKFLOW_NAMES)})",
                     f"exported as {workflow!r}; rename the script or widen that Literal",
                 )
             )
@@ -82,7 +89,7 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     None,
-                    f"{len(enabled)} steps exceeds AlbionHelper's limit of {_MAX_STEPS}",
+                    f"{len(enabled)} steps exceeds the engine's limit of {_MAX_STEPS}",
                     f"only the first {_MAX_STEPS} were exported; split the flow",
                 )
             )
@@ -98,7 +105,7 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     None,
-                    "no step could be represented, and AlbionHelper requires at least one",
+                    "no step could be represented, and the engine requires at least one",
                     "the exported profile will not validate as-is",
                 )
             )
@@ -115,7 +122,7 @@ class AlbionHelperExporter:
             ],
         }
         return ExportResult(
-            filename=f"{script.id}.albionhelper.json",
+            filename=f"{script.id}.profile.json",
             content=json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
             warnings=warnings,
         )
@@ -123,19 +130,18 @@ class AlbionHelperExporter:
     def _convert(
         self, step: Step, warnings: list[ExportWarning], used_names: set[str]
     ) -> dict[str, object] | None:
-        action = _SUPPORTED.get(step.action)
+        action = _ACTION_MAP.get(step.action)
         if action is None:
             warnings.append(
                 ExportWarning(
                     step.id,
-                    f"action {step.action.value!r} has no AlbionHelper equivalent",
+                    f"action {step.action.value!r} has no equivalent in the engine",
                     "drop the step, replace it with a supported action, or extend "
-                    "AlbionHelper's action enum",
+                    "the engine's action enum",
                 )
             )
             return None
 
-        # Its step names must be unique and <=100 chars.
         name = step.name[:_MAX_NAME]
         if name in used_names:
             suffix = f" ({step.id})"
@@ -143,7 +149,7 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     step.id,
-                    "duplicate step name (AlbionHelper requires unique names)",
+                    "duplicate step name (the engine requires unique names)",
                     f"renamed to {name!r}",
                 )
             )
@@ -157,11 +163,11 @@ class AlbionHelperExporter:
         }
 
         if step.action is StepAction.KEY:
-            if step.keycode is not None and step.keycode > 999:
+            if step.keycode is not None and step.keycode > _MAX_KEYCODE:
                 warnings.append(
                     ExportWarning(
                         step.id,
-                        f"keycode {step.keycode} exceeds AlbionHelper's 0-999 range",
+                        f"keycode {step.keycode} exceeds the engine's 0-{_MAX_KEYCODE} range",
                         "use a keycode within range",
                     )
                 )
@@ -176,12 +182,10 @@ class AlbionHelperExporter:
         if step.action is StepAction.LAUNCH_APP:
             return out
 
-        # The remaining actions need a location or a text pattern.
         target = step.target
         if target is None:
             return out
 
-        available = set(target.available_strategies)
         if step.action is StepAction.WAIT_FOR:
             if target.ocr is None:
                 warnings.append(
@@ -200,7 +204,7 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     step.id,
-                    f"AlbionHelper locates only by coordinate, and this target uses "
+                    "the engine locates only by coordinate, and this target uses "
                     f"{target.describe()}",
                     "re-record the step so it also captures a coordinate",
                 )
@@ -210,29 +214,27 @@ class AlbionHelperExporter:
         out["x"] = round(target.coord.x, 6)
         out["y"] = round(target.coord.y, 6)
 
-        # Anything above coordinates in the chain is a robustness feature that
-        # simply will not travel.
-        stronger = available - {Strategy.COORD}
+        # Everything above coordinates in the chain is a robustness feature that
+        # simply will not travel to a coordinate-only engine.
+        stronger = set(target.available_strategies) - {Strategy.COORD}
         if stronger:
             warnings.append(
                 ExportWarning(
                     step.id,
                     f"{', '.join(sorted(s.value for s in stronger))} locator(s) dropped; "
                     "the exported step is coordinate-only",
-                    "it will work on this device's resolution and may miss on others",
+                    "it will work at this device's resolution and may miss on others",
                 )
             )
 
         if step.action is StepAction.INPUT_TEXT:
-            # Its input action reads from a keychain alias rather than carrying
-            # text, which is a deliberate security choice on its side.
             warnings.append(
                 ExportWarning(
                     step.id,
-                    "input_credential reads from AlbionHelper's keychain and cannot "
-                    "carry literal text",
+                    "input_credential reads from the engine's own credential store "
+                    "and cannot carry literal text",
                     "exported as credential_field='username'; set the profile's "
-                    "credential_alias and adjust if this field is the password",
+                    "credential alias and adjust if this field is the password",
                 )
             )
             out["credential_field"] = "username"
@@ -241,7 +243,7 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     step.id,
-                    "assertion dropped (AlbionHelper steps do not verify outcomes)",
+                    "assertion dropped (the engine's steps do not verify outcomes)",
                     "failures will surface at a later step instead of this one",
                 )
             )
@@ -257,8 +259,11 @@ class AlbionHelperExporter:
             warnings.append(
                 ExportWarning(
                     step.id,
-                    f"on_fail={step.on_fail.value!r} dropped; AlbionHelper only retries",
-                    "its WorkflowRunner raises HumanActionRequired on its own triggers",
+                    f"on_fail={step.on_fail.value!r} dropped; the engine only retries",
+                    "handle the case in the engine's own interruption mechanism",
                 )
             )
         return out
+
+
+EXPORTER = ConstrainedProfileExporter()

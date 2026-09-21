@@ -100,25 +100,47 @@ class AdbClient:
         self,
         executable: str | Path = "adb",
         *,
+        server_host: str = "127.0.0.1",
         server_port: int = 5038,
         timeout: float = 15.0,
     ) -> None:
         if not 1 <= server_port <= 65535:
             raise ValueError("server_port must be a valid TCP port")
+        if not server_host:
+            raise ValueError("server_host is required")
         self._executable = str(executable)
+        self._server_host = server_host
         self._server_port = server_port
         self._timeout = timeout
+
+    @property
+    def server_host(self) -> str:
+        """Host running the adb server.
+
+        Almost always localhost, but it is configurable because of one property
+        of adb that breaks naive remote setups: ``adb forward`` binds its local
+        port on the machine running the *server*, not the one running the client.
+        So when the server is elsewhere -- PixelForge in a container with adb on
+        the host, which is the only workable shape on macOS, where Docker cannot
+        see USB at all -- every forwarded port (scrcpy video, scrcpy control,
+        uiautomator2 HTTP) lives on that host too and must be dialled there.
+        """
+        return self._server_host
 
     @property
     def server_port(self) -> int:
         return self._server_port
 
     @property
+    def remote_server(self) -> bool:
+        return self._server_host not in ("127.0.0.1", "localhost", "::1")
+
+    @property
     def env(self) -> dict[str, str]:
         """Environment that points child adb clients at our private server."""
         return {
             **os.environ,
-            "ADB_SERVER_SOCKET": f"tcp:127.0.0.1:{self._server_port}",
+            "ADB_SERVER_SOCKET": f"tcp:{self._server_host}:{self._server_port}",
         }
 
     def resolve_executable(self) -> str:
@@ -201,6 +223,8 @@ class AdbClient:
         if isinstance(args, str):  # pragma: no cover - guards a common mistake
             raise TypeError("args must be a sequence of strings, not a shell string")
         argv = [self._executable, "-P", str(self._server_port)]
+        if self.remote_server:
+            argv += ["-H", self._server_host]
         if serial is not None:
             if not is_valid_serial(serial):
                 raise ValueError(f"invalid adb serial: {serial!r}")

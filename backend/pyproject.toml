@@ -8,7 +8,15 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "httpx>=0.27",          # uiautomator2 HTTP client
+    "numpy>=1.26",          # every captured frame is an array
+    # headless: the server never opens a window, and the GUI variant drags in
+    # X11/GTK libraries that a container image does not need.
+    "opencv-python-headless>=4.9",
 ]
+
+[project.scripts]
+pixelforge = "pixelforge.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -16,7 +24,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
     "mypy>=1.13",
-    "httpx>=0.27",
 ]
 
 [build-system]

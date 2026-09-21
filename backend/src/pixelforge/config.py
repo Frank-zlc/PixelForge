@@ -6,6 +6,7 @@ Every value is overridable through ``PIXELFORGE_*`` environment variables or a
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -13,7 +14,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["Settings", "get_settings"]
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def _repo_root() -> Path:
+    """Locate the checkout, or fall back to the working directory.
+
+    ``parents[2]`` is the backend directory in a src-layout checkout, but in a
+    non-editable wheel install it lands in ``site-packages`` -- where writing a
+    data directory or looking for ``vendor/`` is wrong. Probing for
+    ``pyproject.toml`` distinguishes the two, and the cwd fallback keeps an
+    installed copy working with data under wherever it was started.
+    """
+    candidate = _PACKAGE_DIR.parents[1]
+    return candidate if (candidate / "pyproject.toml").is_file() else Path.cwd()
+
+
+_REPO_ROOT = _repo_root()
 
 
 class Settings(BaseSettings):
@@ -30,6 +47,16 @@ class Settings(BaseSettings):
         description=(
             "Path to adb. Prefer the vendored binary: two adb versions on one "
             "machine kill each other's servers."
+        ),
+    )
+    adb_server_host: str = Field(
+        default="127.0.0.1",
+        description=(
+            "Host running the adb server. Set this when PixelForge runs in a "
+            "container and adb runs on the host -- the only workable shape on "
+            "macOS, where Docker cannot access USB. Forwarded ports (scrcpy, "
+            "uiautomator2) are dialled here too, because adb binds them on the "
+            "server's machine."
         ),
     )
     adb_server_port: int = Field(
@@ -54,6 +81,16 @@ class Settings(BaseSettings):
         description="Device lease TTL; the frontend heartbeats at roughly TTL/3.",
     )
 
+    # --- plugins -------------------------------------------------------------
+    exporter_plugins: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "Directories of exporter plugin modules. Business-specific export "
+            "formats live here rather than in core -- see examples/exporters/. "
+            "These are imported as Python, so treat them as source."
+        ),
+    )
+
     # --- server --------------------------------------------------------------
     host: str = "127.0.0.1"
     port: int = Field(default=8420, ge=1, le=65535)
@@ -64,6 +101,29 @@ class Settings(BaseSettings):
     @classmethod
     def _expand(cls, value: Path) -> Path:
         return value.expanduser()
+
+    @field_validator("exporter_plugins")
+    @classmethod
+    def _expand_all(cls, value: list[Path]) -> list[Path]:
+        return [path.expanduser() for path in value]
+
+    @property
+    def frontend_dir(self) -> Path | None:
+        """Where the build-free frontend lives, if it is present.
+
+        Checked rather than computed: a wheel install has no sibling ``frontend``
+        directory, and the API must still come up in that case -- just without the
+        UI mounted.
+        """
+        override = os.environ.get("PIXELFORGE_FRONTEND_DIR", "").strip()
+        candidates = (
+            [Path(override).expanduser()]
+            if override
+            else [_REPO_ROOT.parent / "frontend", Path.cwd() / "frontend"]
+        )
+        return next(
+            (path for path in candidates if (path / "index.html").is_file()), None
+        )
 
     @property
     def templates_dir(self) -> Path:

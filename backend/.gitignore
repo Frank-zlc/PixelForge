@@ -1,13 +1,10 @@
-# 二进制依赖。按 vendor/README.md 自行下载，版本必须与代码匹配。
-#
-# 不入库的原因：adb 与两个 APK 是平台相关的大文件，scrcpy jar 虽小但与
-# ScrcpyConfig.scrcpy_version 强绑定。把它们塞进 git 会让仓库随每次版本
-# 升级持续膨胀，而每个开发者本来就需要按自己的平台取一份。
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pixelforge/
 vendor/platform-tools/
 vendor/*.jar
 vendor/*.apk
-vendor/*.zip
-vendor/tessdata/
-
-# README 必须保留 —— 它是拿到上面这些文件的唯一说明
-!vendor/README.md

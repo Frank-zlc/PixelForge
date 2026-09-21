@@ -58,7 +58,7 @@ t=0.95s  step_4  wait_text("总价")
 | 场景 | 特征 | 主要定位手段 |
 |------|------|-------------|
 | **A. 普通 app 业务流程** （电商下单、表单填写、账号注册） | 有完整无障碍信息 | 控件选择器（`resource-id` / `text`）为主，跨机型稳定 |
-| **B. 游戏 / Canvas / 自绘 UI** （AlbionHelper 的市场页属于这类） | 无障碍树为空或无意义 | 模板匹配 + OCR，坐标兜底 |
+| **B. 游戏 / Canvas / 自绘 UI** （游戏内商店、图表、地图这类） | 无障碍树为空或无意义 | 模板匹配 + OCR，坐标兜底 |
 | **C. WebView / 混合应用** | 部分有 a11y，层级怪 | 控件 + 模板混合 |
 
 **设计约束：三类必须由同一套工具覆盖，通过定位策略降级链自动适配，而不是让用户选模式。**
@@ -88,7 +88,7 @@ t=0.95s  step_4  wait_text("总价")
 
 **调试层** · 断点 / 单步 / 运行到 / 从某步继续 / 只跑一步 · 暂停时人工接管真机 · 步骤时间线（前后截图 + 匹配分数 + 匹配框）
 
-**集成层** · 项目隔离（每个业务一个项目）· 导出插件（AlbionHelper profile / pytest / JSON）· 监听插件（logcat / mitmproxy / pcap）· 统一时间线 · CLI 入口（CI 可跑）
+**集成层** · 项目隔离（每个业务一个项目）· 导出插件（原生 JSON / pytest / 目录加载的第三方插件）· 监听插件（logcat / mitmproxy / pcap）· 统一时间线 · CLI 入口（CI 可跑）
 
 ### 3.2 明确的非目标
 
@@ -141,7 +141,7 @@ t=0.95s  step_4  wait_text("总价")
 
 | 阶段 | 内容 | 工期 | 验收标准 |
 |------|------|:---:|---------|
-| **P7** 项目与导出 | 项目概念（每业务一套设备池/模板库/脚本/变量）；`Exporter` 插件接口；AlbionHelper profile exporter；pytest exporter | **3–4 天** | 导出的 AlbionHelper profile 能被其 `WorkflowProfiles.load()` 校验通过；导出的 pytest 能在 CI 跑 |
+| **P7** 项目与导出 | 项目概念（每业务一套设备池/模板库/脚本/变量）；`Exporter` 插件接口与目录加载；原生 JSON 与 pytest 导出器 | **3–4 天** | 第三方插件能从配置目录加载并注册；导出的 pytest 能在 CI 跑；降级处必须报警 |
 | **P8** 监听与时间线 | `Listener` 插件接口；logcat listener；mitmproxy listener；pcap/UDP listener 接口；统一时间线对齐 | **4–5 天** | 点击后能在时间线看到对应网络事件，时间偏差 < 100ms |
 | **P9** 工程化 | 鉴权；多设备并发压测；CLI 入口；部署文档 + Docker；错误处理与可观测性 | **4–5 天** | **3 台设备同时运行互不干扰**；CLI 无头执行脚本；冷启动文档能让另一个人独立部署成功 |
 
@@ -215,22 +215,24 @@ P0 阶段就实现一个 `secure_window_probe`：截图后检测「整屏或大�
 
 ---
 
-## 7. 与 AlbionHelper 的关系
+## 7. 与下游执行引擎的关系
 
-AlbionHelper 是 PixelForge 的**第一个下游消费者**，不是它的依赖。
-
-```
-PixelForge  ──导出──▶  WorkflowProfiles JSON  ──▶  AlbionHelper WorkflowRunner
-（编写调试）              （交付产物）                    （生产执行）
-```
-
-**依赖方向必须是单向的：PixelForge 不 import AlbionHelper 的任何模块。** 反向依赖会让通用工具被一个业务的 schema 绑死 —— AlbionHelper 的 `WorkflowProfileStep` 只有 6 个 action、没有 swipe、没有断言、只支持 OCR 文本匹配，把它当成 PixelForge 的内部模型，等于让第二个业务一进来就得改公共 schema。
-
-正确做法：PixelForge 有自己更富的 Step 模型，`AlbionHelperExporter` 做一次**有损降级转换**，并在转换不了时明确报错：
+下游项目是 PixelForge 的**消费者**，不是它的依赖。
 
 ```
-⚠ 步骤 4 使用了模板匹配定位，AlbionHelper profile 不支持 wait_image。
-  可选：① 改用 OCR 文本定位  ② 降级为坐标  ③ 扩展 AlbionHelper 的 action 枚举
+PixelForge  ──导出──▶  目标 profile 格式  ──▶  下游引擎执行
+（编写调试）              （交付产物）              （生产运行）
 ```
 
-这条提示本身就是有价值的产出 —— 它告诉你 AlbionHelper 该往哪扩展，而不是悄悄丢掉信息。
+**依赖方向必须单向：PixelForge 不 import 任何下游业务模块。** 反向依赖会让通用工具被一个业务的 schema 绑死——下游引擎的步骤格式通常刻意做得很窄（固定 action 枚举、`extra="forbid"`、仅坐标定位），因为下发到边缘节点执行的 profile 不该能携带任意行为，这是正当的安全决策。但把这样一份 schema 当成 PixelForge 的内部模型，等于让第二个业务一进来就得改公共 schema。
+
+具体做法：PixelForge 有自己更富的 Step 模型，下游格式通过 **Exporter 插件**对接。插件放在 `PIXELFORGE_EXPORTER_PLUGINS` 指向的目录里，核心的注册表只保留与业务无关的两个导出器。
+
+转换不了的地方必须**明确报错，而不是悄悄丢掉**：
+
+```
+⚠ 步骤 4 使用模板匹配定位，目标 profile 不支持 wait_image。
+  可选：① 改用 OCR 文本定位  ② 降级为坐标  ③ 扩展目标引擎的 action 枚举
+```
+
+这条提示本身就是有价值的产出——它告诉你目标引擎该往哪扩展。静默丢信息会产出**在 IDE 里通过、在生产里少做事**的脚本，这是最糟的失败形态。

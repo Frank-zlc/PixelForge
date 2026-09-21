@@ -1,0 +1,36 @@
+# 应用在容器里，adb server 在宿主机。
+#
+# 启动前，先在宿主机上跑 adb server 并让它监听容器能到达的地址：
+#
+#     adb -a -P 5038 nodaemon server
+#
+# -a 让它绑 0.0.0.0（默认只绑 127.0.0.1，容器到不了）。
+#
+# ⚠️ 安全：adb server 没有认证。绑到 0.0.0.0 意味着**同网段任何人都能完全控制
+#    你连着的手机**——装应用、读文件、截屏。只在可信网络上这么做，并用防火墙
+#    把 5038 限制到 Docker 网桥。生产环境请用 Linux + USB 直通（见 docs/DEPLOY.md）。
+
+services:
+  pixelforge:
+    build:
+      context: .
+      args:
+        # 必须与宿主机 `adb version` 报的版本一致，否则两个 adb 会互相 kill server
+        PLATFORM_TOOLS_VERSION: "${PLATFORM_TOOLS_VERSION:-latest}"
+    image: pixelforge:local
+    ports:
+      - "127.0.0.1:8420:8420"   # 只绑本机；要给同事访问再改
+    environment:
+      # macOS / Windows 上 Docker Desktop 自带这个名字；Linux 靠下面的 extra_hosts
+      PIXELFORGE_ADB_SERVER_HOST: host.docker.internal
+      PIXELFORGE_ADB_SERVER_PORT: "5038"
+      PIXELFORGE_LOG_LEVEL: INFO
+      # 业务专有的导出插件放这里（见 examples/exporters/）
+      # PIXELFORGE_EXPORTER_PLUGINS: '["/plugins"]'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux 需要；Mac/Win 上无害
+    volumes:
+      - ./data:/data                                   # 项目、脚本、模板、截图
+      - ./backend/vendor:/app/backend/vendor:ro        # scrcpy jar 与 APK
+      # - ./my-plugins:/plugins:ro
+    restart: unless-stopped

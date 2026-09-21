@@ -115,7 +115,6 @@ async def control(websocket: WebSocket, serial: str) -> None:
         return
     await websocket.send_json({"type": "ready", "frame": list(session.mapper.frame.as_tuple())})
 
-    frame = session.mapper.frame
     try:
         while True:
             message = await websocket.receive_json()

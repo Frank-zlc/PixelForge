@@ -18,11 +18,11 @@
 | **P4** | UiAutomator2 · 模板匹配 · OCR · 四策略降级链 · FLAG_SECURE 诊断 | ✅ |
 | **P5** | Step/Target/Project 模型 · 执行器 · 录制 | ✅ |
 | **P6** | 断点 · 单步 · 人工接管 · 步骤时间线 | ✅ |
-| **P7** | Exporter 插件（原生 / AlbionHelper / pytest） | ✅ |
+| **P7** | Exporter 插件机制（原生 / pytest / 第三方插件） | ✅ |
 | **P8** | Listener 插件 · logcat · 统一时间线 | ✅ |
 | **P9** | 前端 IDE · API 装配 · 部署 | ✅ |
 
-**测试：358 项，全部通过。** 未在真机上跑过 —— 需要你接上手机验收，清单见下。
+**测试：370 项，全部通过。** 未在真机上跑过 —— 需要你接上手机验收，清单见下。
 
 ---
 
@@ -32,27 +32,37 @@
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+cp .env.example .env        # 按需修改；.env 不入库
 
-# adb：强烈建议 vendor 一份固定版本，不要用 $PATH 里的
-export PIXELFORGE_ADB_EXECUTABLE=/path/to/adb
-
-uvicorn pixelforge.main:app --port 8420
+pixelforge doctor           # 先看缺什么，每项都说明缺了会失去什么
+pixelforge serve
 ```
 
 打开 <http://127.0.0.1:8420/> 即是 IDE，<http://127.0.0.1:8420/docs> 是 API 文档。
 
+其他命令：`pixelforge devices` 列设备、`pixelforge run <项目> <脚本> --device <serial>`
+无头执行（CI 入口，失败返回非零）、`pixelforge export <项目> <脚本> --exporter <名字>`。
+
 > ⚠️ **只能单 worker 运行。** 设备会话、scrcpy 连接、租约、运行中的脚本都是进程内状态。
 > `--workers N` 会让请求随机落到没有该设备会话的进程上，症状是"能用，但偶尔莫名 409"。
 
-### 三个可选依赖
+### 四项可选依赖
 
-缺了不会导致启动失败，只会关掉对应能力，`/api/health` 会如实报告：
+缺了不会导致启动失败，只关掉对应能力。`pixelforge doctor` 和 `/api/health` 都会如实报告：
 
-| 依赖 | 缺失时失去 | 获取方式 |
-|------|-----------|---------|
-| `vendor/scrcpy-server.jar` | 实时画面、低延迟控制 | 从 scrcpy releases 下载对应版本的 jar |
-| `uiautomator2-server*.apk` | 控件选择器（模板/OCR 仍可用） | appium-uiautomator2-server releases |
-| `tesseract` | OCR 定位 | `brew install tesseract tesseract-lang` |
+| 依赖 | 缺失时失去 | 仍可用 | 获取方式 |
+|------|-----------|--------|---------|
+| **adb** | 全部设备功能 | —（唯一致命的） | `brew install android-platform-tools` |
+| `vendor/scrcpy-server.jar` | 实时画面、低延迟控制 | 截图、控件树、OCR、模板 | scrcpy releases 里对应版本的 jar |
+| `uiautomator2-server*.apk` | 控件选择器 | 模板、OCR、坐标 | appium-uiautomator2-server releases |
+| `tesseract` | OCR 定位 | 控件、模板、坐标 | `brew install tesseract tesseract-lang` |
+
+### 部署形态
+
+**本地优先的 Web 应用**——浏览器界面 + Python 服务，但服务必须跑在能物理接触到
+手机的那台机器上。不是桌面程序，也不是 SaaS。三种部署方式（直接跑 / Docker +
+宿主 adb / Linux USB 直通）和 macOS 上 Docker 看不到 USB 这个硬约束，见
+[docs/DEPLOY.md](./docs/DEPLOY.md)。
 
 ### 受限网络环境
 
@@ -99,7 +109,7 @@ OCR TSV 解析与真实识别 · FLAG_SECURE 诊断 · 执行器降级/重试/�
 3. **四策略降级链**（控件 → 模板 → OCR → 坐标）是通用化的核心。录制时一次采全四种特征，回放按序降级，所以同一套工具能同时覆盖普通 app 和游戏，不用让用户选模式。
 4. **失败必须可区分。** "没找到"和"找到了但点偏了"需要完全相反的修法，所以每步都记录前后截图和定位分数。
 5. **导出降级必须报警。** 静默丢掉一个断言，会产出在 IDE 里通过、在生产里少做事的脚本——最糟的失败形态。
-6. **依赖方向单向。** PixelForge 不 import 任何下游业务模块；AlbionHelper 等通过 Exporter 插件对接。
+6. **核心不含业务知识。** 面向某个具体执行引擎的导出器编码的是那个引擎的 schema，放进核心就等于让通用工具替某家公司记格式——第二家进来时注册表会变成一张别人格式的清单。所以这类导出器走插件（`PIXELFORGE_EXPORTER_PLUGINS`），`examples/exporters/` 有完整可抄的例子。
 7. **能力缺失不阻断启动。** 缺 adb / scrcpy jar / tesseract 各自只关掉一项能力，如实上报。
 
 ## 四个扩展点
@@ -110,7 +120,7 @@ OCR TSV 解析与真实识别 · FLAG_SECURE 诊断 · 执行器降级/重试/�
 |--------|------|---------|
 | `DeviceProvider` | 设备从哪来 | `LocalAdbProvider`（DeviceFarmer 按此接口接入） |
 | `Locator` | 元素怎么找 | a11y / template / ocr / coord |
-| `Exporter` | 产物给谁执行 | pixelforge / albionhelper / pytest |
+| `Exporter` | 产物给谁执行 | pixelforge / pytest（+ 目录插件） |
 | `Listener` | 监听什么 | logcat（mitmproxy、pcap 已声明未实现，理由见 registry） |
 
 ## 目录

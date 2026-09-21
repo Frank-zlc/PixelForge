@@ -22,6 +22,7 @@ const state = {
   display: null,
   nodes: [],
   lastPoint: null, // describe() output for the last click
+  lastNode: null, // accessibility node under the last click, if any
   selection: null, // {x,y,width,height} in CSS space
   project: null,
   script: null,
@@ -866,9 +867,10 @@ window.addEventListener('resize', () => {
   syncOverlaySize();
   drawOverlay(null);
 });
-window.addEventListener('beforeunload', () => {
-  if (state.session) navigator.sendBeacon?.('/api/noop');
-});
+// No beacon on unload. sendBeacon can only POST, the release endpoint is a DELETE,
+// and the earlier version fired at a /api/noop that never existed -- a 404 on every
+// page close. The lease TTL is the mechanism for "the browser went away": it expires
+// in 60s and the sweeper frees the device. An explicit close is the Release button.
 
 loadHealth();
 loadDevices();

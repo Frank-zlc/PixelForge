@@ -156,7 +156,9 @@ class LocalAdbProvider:
             with contextlib.suppress(AdbError):
                 await self._adb.start_server()
 
-        reader, writer = await asyncio.open_connection("127.0.0.1", self._adb.server_port)
+        reader, writer = await asyncio.open_connection(
+            self._adb.server_host, self._adb.server_port
+        )
         try:
             writer.write(encode_request("host:track-devices"))
             await writer.drain()
@@ -166,7 +168,11 @@ class LocalAdbProvider:
                 reason = await _read_failure_reason(reader)
                 raise AdbProtocolError(f"track-devices rejected: {status!r} {reason}")
 
-            logger.info("device tracking established on port %d", self._adb.server_port)
+            logger.info(
+                "device tracking established on %s:%d",
+                self._adb.server_host,
+                self._adb.server_port,
+            )
             while True:
                 length = parse_length_prefix(await reader.readexactly(4))
                 # A zero-length push is valid and means "nothing attached".

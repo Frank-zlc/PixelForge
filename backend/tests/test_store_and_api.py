@@ -126,7 +126,7 @@ class TestApi:
         assert response.status_code == 422
         assert "target" in response.text
 
-    def test_export_reports_warnings(self, client) -> None:
+    def test_export_returns_content_and_a_warning_list(self, client) -> None:
         client.post("/api/projects", json={"id": "shop", "name": "Shop", "app_package": "com.shop"})
         client.put("/api/projects/shop/scripts/flow", json={
             "id": "flow", "name": "Flow",
@@ -140,10 +140,21 @@ class TestApi:
             }],
         })
         payload = client.post(
-            "/api/projects/shop/scripts/flow/export", json={"exporter": "albionhelper"}
+            "/api/projects/shop/scripts/flow/export", json={"exporter": "pixelforge"}
         ).json()
-        assert payload["lossless"] is False
-        assert payload["warnings"]
+        assert payload["lossless"] is True
+        assert payload["warnings"] == []
+        assert "com.shop:id/pay" in payload["content"]
+
+    def test_unknown_exporter_is_a_client_error(self, client) -> None:
+        client.post("/api/projects", json={"id": "shop", "name": "Shop"})
+        client.put("/api/projects/shop/scripts/flow",
+                   json={"id": "flow", "name": "Flow", "steps": []})
+        response = client.post(
+            "/api/projects/shop/scripts/flow/export", json={"exporter": "nope"}
+        )
+        assert response.status_code == 400
+        assert "available" in response.text
 
     def test_device_actions_require_a_session(self, client) -> None:
         # Exclusivity is not advisory: without it two operators interleave taps.
@@ -155,7 +166,7 @@ class TestApi:
             assert client.post(path, json=body).status_code == 403
 
     def test_exporters_and_listeners_are_listed(self, client) -> None:
-        assert {e["name"] for e in client.get("/api/exporters").json()} >= {"pixelforge", "pytest"}
+        assert {e["name"] for e in client.get("/api/exporters").json()} == {"pixelforge", "pytest"}
         listeners = {item["name"]: item["status"] for item in client.get("/api/listeners").json()}
         assert listeners["logcat"] == "built"
         # Declared as planned rather than omitted, so the choice is visible.

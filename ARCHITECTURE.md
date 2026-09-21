@@ -4,15 +4,15 @@
 >
 > 产品定位、功能范围与开发周期见 [PRODUCT.md](./PRODUCT.md)。本文只讲技术架构。
 >
-> **v3 相对 v2 的核心变更**：工具定位由「AlbionHelper 的编辑器」改为「通用 IDE」。因此解除对 AlbionHelper 的依赖，引入四个插件扩展点，Step 模型独立且更富。v1/v2 的勘误见 §11。
+> **v3 相对 v2 的核心变更**：工具定位由「某个业务的编辑器」改为「通用 IDE」。因此解除对任何下游业务的依赖，引入四个插件扩展点，Step 模型独立且更富。v1/v2 的勘误见 §11。
 
 ---
 
 ## 1. 依赖方向：单向，不可反转
 
-v2 建议 PixelForge 依赖 AlbionHelper 的 `cli` 包以共享 `WorkflowProfileStep` schema。**作为通用工具这是错的。**
+v2 建议 PixelForge 依赖某个下游项目的包，以共享它的步骤 schema。**作为通用工具这是错的。**
 
-AlbionHelper 的 `WorkflowProfileStep` 只有 6 个 action、没有 `swipe`、没有断言、只支持 OCR 文本匹配。把它当作 PixelForge 的内部模型，等于让**第二个业务一进来就必须改公共 schema** —— 而那个 schema 正在生产环境被 `WorkflowRunner` 执行。
+下游引擎的 schema 通常比这里窄得多——典型的一份只有 6 个 action、没有 swipe、没有断言、只支持 OCR 文本匹配，而且刻意用 `extra="forbid"` 锁死（下发到边缘节点执行的 profile 不该能携带任意行为，这是正当的安全决策）。把这样一份 schema 当作 PixelForge 的内部模型，等于让**第二个业务一进来就必须改公共 schema** —— 而那个 schema 正在生产环境被执行。
 
 ```
         ┌─────────────────────────────────────────┐
@@ -21,15 +21,15 @@ AlbionHelper 的 `WorkflowProfileStep` 只有 6 个 action、没有 `swipe`、�
                            │  Exporter 插件（有损降级 + 明确报错）
           ┌────────────────┼────────────────┐
           ▼                ▼                ▼
-   AlbionHelper        pytest          其他执行引擎
+   第三方插件          pytest          其他执行引擎
    WorkflowProfiles    测试文件         Appium / 自研
 ```
 
 **PixelForge 不 import 任何下游业务的模块。** 转换不了的时候明确报错，而不是悄悄丢信息：
 
 ```
-⚠ 步骤 4 使用模板匹配定位，AlbionHelper profile 不支持 wait_image。
-  可选：① 改用 OCR 文本定位  ② 降级为坐标  ③ 扩展 AlbionHelper 的 action 枚举
+⚠ 步骤 4 使用模板匹配定位，目标 profile 不支持 wait_image。
+  可选：① 改用 OCR 文本定位  ② 降级为坐标  ③ 扩展目标引擎的 action 枚举
 ```
 
 这条提示本身就是产出 —— 它告诉你下游该往哪扩展。
@@ -138,7 +138,11 @@ class Exporter(Protocol):
         """返回产物文件 + 降级警告列表。表达不了的必须报警告，不得静默丢弃。"""
 ```
 
-内置：`PixelForgeJsonExporter`（原生全量）、`AlbionHelperExporter`（降级到 `WorkflowProfiles`）、`PytestExporter`（生成可进 CI 的测试）。
+内置只有两个，且都与业务无关：`PixelForgeJsonExporter`（原生全量）和 `PytestExporter`（生成可进 CI 的测试）。
+
+面向具体执行引擎的导出器**不进核心**——它编码的是那个引擎的 action 枚举、字段名和限制，核心收了第一个，第二个引擎就会要求同等待遇，注册表最后变成一张别人格式的清单。这类导出器走目录插件：`PIXELFORGE_EXPORTER_PLUGINS` 指向的目录里每个 `*.py` 会被导入并注册它的 `EXPORTER`。`examples/exporters/constrained_profile.py` 是一份完整可抄的实现（六动作、仅归一化坐标、仅 OCR 文本等待、步骤名唯一、上限 30 步）。
+
+插件是被执行的 Python 代码，信任级别与源码相同；这也是发现机制做成显式配置而不是扫描文件系统的原因。
 
 ### 3.4 `Listener` —— 监听什么
 
@@ -186,7 +190,7 @@ class Step(BaseModel):
     params:       dict = {}                     # action 特有参数
 ```
 
-对比 AlbionHelper 的 6 个 action：多了 `swipe` / `gesture` / `long_press`、断言、`wait_for` 的多种条件、`on_fail: human`（触发人工接管）、以及 `Target` 的四策略结构。
+对比典型下游引擎的 6 个 action：多了 `swipe` / `gesture` / `long_press`、断言、`wait_for` 的多种条件、`on_fail: human`（触发人工接管）、以及 `Target` 的四策略结构。
 
 **`Project` 是业务隔离单元：**
 
@@ -396,7 +400,7 @@ PixelForge/
 │   │   │   ├── sdk.py              dev SDK
 │   │   │   ├── executor.py
 │   │   │   └── debugger.py
-│   │   ├── exporters/              pixelforge_json / albionhelper / pytest
+│   │   ├── exporters/              pixelforge_json / pytest / 插件加载
 │   │   ├── listeners/              logcat / mitmproxy / pcap
 │   │   ├── timeline/bus.py
 │   │   ├── store/                  SQLite + 文件系统
@@ -426,10 +430,10 @@ PixelForge/
 
 | 说法 | 修正 |
 |------|------|
-| v1「DeviceFarmer 用 `adb shell input tap`，太慢」 | **错。** DeviceFarmer 用 minitouch（守护进程直写 `/dev/input/eventX`），< 10ms，支持多点手势。用 `input tap` 的是 AlbionHelper 自己的 `adb.py`。结论仍成立（该换掉），但批评对象错了。 |
-| v1「FLAG_SECURE 是 P0 阻塞」 | 对单业务是过度警告（AlbionHelper 的 OCR 已跑通，证明该游戏没设）。但**对通用工具不可排除**，处理方式见 §9。 |
-| v2「PixelForge 依赖 AlbionHelper 的 cli 包共享 schema」 | **错。** 通用工具不能被一个业务的 schema 绑死。依赖方向必须单向，AlbionHelper 降级为 Exporter 插件。见 §1。 |
-| v2「PixelForge = AlbionHelper WorkflowProfiles 的可视化 IDE」 | 定位过窄。正确定位见 PRODUCT.md §1。 |
+| v1「DeviceFarmer 用 `adb shell input tap`，太慢」 | **错。** DeviceFarmer 用 minitouch（守护进程直写 `/dev/input/eventX`），< 10ms，支持多点手势。用 `input tap` 的是调研时看的那个下游项目自己的 adb 封装。结论仍成立（该换掉），但批评对象错了。 |
+| v1「FLAG_SECURE 是 P0 阻塞」 | 对某个已验证的单业务是过度警告（那里 OCR 已跑通，证明目标 app 没设）。但**对通用工具不可排除**，处理方式见 §9。 |
+| v2「PixelForge 依赖下游项目的包共享 schema」 | **错。** 通用工具不能被一个业务的 schema 绑死。依赖方向必须单向，下游格式降级为 Exporter 插件。见 §1。 |
+| v2「PixelForge = 某个下游 profile 格式的可视化 IDE」 | 定位过窄。正确定位见 PRODUCT.md §1。 |
 
 ---
 

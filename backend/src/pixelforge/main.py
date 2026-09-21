@@ -27,7 +27,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pixelforge.adb.client import AdbClient, AdbNotFoundError
@@ -42,6 +42,7 @@ from pixelforge.device.manager import SessionManager
 from pixelforge.device.provider import LocalAdbProvider
 from pixelforge.device.registry import DeviceRegistry
 from pixelforge.device.scrcpy.session import ScrcpyConfig
+from pixelforge.exporters.registry import list_exporters, load_plugin_dir
 from pixelforge.store.projects import ProjectStore
 from pixelforge.timeline.bus import TimelineBus
 from pixelforge.ws import events as events_ws
@@ -49,8 +50,6 @@ from pixelforge.ws import screen as screen_ws
 from pixelforge.ws import timeline as timeline_ws
 
 logger = logging.getLogger(__name__)
-
-_FRONTEND = Path(__file__).resolve().parents[3] / "frontend"
 
 
 def build_app(settings: Settings | None = None) -> FastAPI:
@@ -65,6 +64,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         adb = AdbClient(
             config.adb_executable,
+            server_host=config.adb_server_host,
             server_port=config.adb_server_port,
             timeout=config.adb_timeout_s,
         )
@@ -107,6 +107,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "control are unavailable. Screenshots and inspection still work. "
                 "See vendor/README.md."
             )
+        for directory in config.exporter_plugins:
+            loaded = load_plugin_dir(directory)
+            if loaded:
+                logger.info("exporter plugins from %s: %s", directory, ", ".join(loaded))
+
         if not sessions.ocr_available:
             logger.warning(
                 "Tesseract not found -- the OCR locator is unavailable "
@@ -159,17 +164,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "capabilities": {
                 "scrcpy_jar": (config.vendor_dir / "scrcpy-server.jar").is_file(),
                 "ocr": sessions.ocr_available,
+                "frontend": frontend is not None,
             },
+            "exporters": [item["name"] for item in list_exporters()],
         }
 
     # The frontend is build-free static files, so it is served from the same
     # origin: no bundler, no node_modules, no CORS to configure in development.
-    if _FRONTEND.is_dir():
-        app.mount("/app", StaticFiles(directory=_FRONTEND, html=True), name="frontend")
+    # Absent in a wheel install, where the API still has to come up without it.
+    frontend = config.frontend_dir
+    if frontend is not None:
+        app.mount("/app", StaticFiles(directory=frontend, html=True), name="frontend")
 
+        # Redirect rather than serving index.html at "/" directly. index.html
+        # references "styles.css" and "app.js" relatively, so a page served at "/"
+        # resolves them to "/styles.css" and "/app.js" -- outside the mount, and a
+        # 404 each. Redirecting puts the document at "/app/", where the relative
+        # paths land inside the mount.
+        #
+        # Mounting StaticFiles at "/" instead would also fix the paths, but it
+        # swallows every unmatched request, so a mistyped API path would return
+        # the HTML page instead of a 404.
         @app.get("/", include_in_schema=False)
-        async def index() -> FileResponse:
-            return FileResponse(_FRONTEND / "index.html")
+        async def index() -> RedirectResponse:
+            return RedirectResponse(url="/app/", status_code=307)
+    else:
+        logger.info(
+            "no frontend directory found -- serving the API only. Set "
+            "PIXELFORGE_FRONTEND_DIR to mount the UI."
+        )
 
     return app
 

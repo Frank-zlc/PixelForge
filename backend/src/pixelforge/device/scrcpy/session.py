@@ -227,7 +227,8 @@ class ScrcpySession:
             last: Exception | None = None
             while asyncio.get_running_loop().time() < deadline:
                 try:
-                    return await asyncio.open_connection("127.0.0.1", port)
+                    # The forward lives on the adb server's host, not ours.
+                    return await asyncio.open_connection(self._adb.server_host, port)
                 except OSError as exc:
                     # The forward exists before the server binds, so a refusal
                     # here is normal for the first few hundred milliseconds.

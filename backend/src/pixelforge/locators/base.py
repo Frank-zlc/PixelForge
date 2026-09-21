@@ -57,18 +57,30 @@ class LocateResult:
         return self.box.center
 
 
-@dataclass(frozen=True, slots=True)
 class LocateFailure(Exception):
-    """Every strategy failed, with what each one saw."""
+    """Every strategy failed, with what each one saw.
 
-    target: Target
-    attempts: tuple[tuple[Strategy, str], ...]
+    A plain exception rather than a dataclass: ``@dataclass(frozen=True,
+    slots=True)`` on an Exception subclass leaves ``args`` empty and interferes
+    with pickling and ``copy``, which matters the moment one of these crosses a
+    process boundary into the CV worker pool.
+    """
 
-    def __str__(self) -> str:
+    def __init__(
+        self, target: Target, attempts: tuple[tuple[Strategy, str], ...]
+    ) -> None:
+        self.target = target
+        self.attempts = attempts
+        super().__init__(self._describe())
+
+    def _describe(self) -> str:
         if not self.attempts:
             return "no strategy was applicable to this target"
         lines = " | ".join(f"{s.value}: {why}" for s, why in self.attempts)
         return f"element not found -- {lines}"
+
+    def __str__(self) -> str:
+        return self._describe()
 
 
 @runtime_checkable

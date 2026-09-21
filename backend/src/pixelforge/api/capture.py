@@ -26,6 +26,18 @@ from pixelforge.geometry.mapper import Point, Rect, Size, Space
 router = APIRouter(prefix="/api/devices", tags=["capture"])
 
 
+def _encode_png(pixels: object) -> bytes:
+    """Encode an RGB array to PNG bytes without touching the filesystem."""
+    import cv2
+
+    ok, encoded = cv2.imencode(".png", cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
+    if not ok:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "could not encode the capture"
+        )
+    return bytes(encoded.tobytes())
+
+
 class CaptureRequest(BaseModel):
     token: str = Field(min_length=1, max_length=64)
     fresh: bool = True
@@ -74,9 +86,11 @@ async def capture(
     require_lease(leases, serial, body.token)
     session = require_session(sessions, serial)
     shot = await session.capture(fresh=body.fresh)
-    payload = shot.data if shot.is_png else shot.save(
-        session.templates_dir / "_tmp.png"
-    ).read_bytes()
+    # RAW captures are re-encoded in memory. The previous version wrote a
+    # "_tmp.png" into the project's template directory, which both littered the
+    # template library and crashed outright when no project was bound
+    # (templates_dir is None -> None / "_tmp.png").
+    payload = shot.data if shot.is_png else _encode_png(shot.to_array())
     return Response(
         content=payload,
         media_type="image/png",

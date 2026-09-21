@@ -1,7 +1,7 @@
 """OCR via Tesseract, with the parsing separated from the subprocess.
 
-Adapted and generalised from AlbionHelper's ``recognition.py``. Two things
-carried over because they were learned the hard way, and one thing dropped:
+Two things here were learned the hard way and are worth keeping; one common
+addition is deliberately left out:
 
 *Carried over.* Resolving the Tesseract binary explicitly, because a GUI-launched
 process inherits a ``PATH`` without ``/opt/homebrew/bin`` or ``/usr/local/bin``
@@ -10,9 +10,10 @@ terminal. And the word-level output shape -- text, confidence and bounding box
 per word -- which is what lets OCR act as a *locator* rather than just a text
 dump: knowing "总价" is at (412, 1180) is what makes it clickable.
 
-*Dropped.* The page-classification rules. Deciding that a screen is a market buy
-list from the words on it is business knowledge, and PixelForge carries none.
-That logic stays in the project that owns it.
+*Left out.* Page classification. Deciding *which screen* the recognised words
+belong to -- "this is a product list", "this is a checkout confirmation" -- is
+business knowledge, and PixelForge carries none. That logic belongs in whatever
+project owns the app.
 
 ``parse_tsv`` is pure and therefore testable without the binary installed, which
 matters because that is where the bugs are: Tesseract emits rows for page, block,
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pixelforge.geometry.mapper import Point, Rect
+from pixelforge.geometry.mapper import Point, Rect, Size
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
@@ -229,11 +230,7 @@ class TesseractOcr:
 
         offset = (0, 0)
         if crop is not None:
-            box = crop.clamped_to(
-                __import__("pixelforge.geometry.mapper", fromlist=["Size"]).Size(
-                    image.shape[1], image.shape[0]
-                )
-            )
+            box = crop.clamped_to(Size(image.shape[1], image.shape[0]))
             image = image[box.y : box.bottom, box.x : box.right]
             offset = (box.x, box.y)
 

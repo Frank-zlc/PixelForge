@@ -227,6 +227,10 @@ __marimo__/
 .pixelforge/
 pixelforge-data/
 
+# docker-compose 把 ./data 挂成容器的 /data，内容同上
+/data/*
+!/data/.gitkeep
+
 # 设备侧临时产物
 window_dump.xml
 pf-dump.xml

@@ -228,7 +228,8 @@ class UiAutomatorPort:
             return None
         import httpx
 
-        url = f"http://127.0.0.1:{self._local_port}{path}"
+        # Same reason as scrcpy: adb forward binds on the server's host.
+        url = f"http://{self._adb.server_host}:{self._local_port}{path}"
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(url)
