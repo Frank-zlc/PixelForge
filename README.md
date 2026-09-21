@@ -57,6 +57,23 @@ pixelforge serve
 | `uiautomator2-server*.apk` | 控件选择器 | 模板、OCR、坐标 | appium-uiautomator2-server releases |
 | `tesseract` | OCR 定位 | 控件、模板、坐标 | `brew install tesseract tesseract-lang` |
 
+### 无线连接（USB 掉线 / 手机连着热点时用这条）
+
+手机接在 Mac 热点上做抓包时，USB 那条链路经常出问题——最常见的是开了
+"USB 网络共享"：MIUI 会把 USB 功能从 `mtp,adb` 换成 `rndis`，adb 直接从
+USB 配置里消失。症状是手机照常充电、Mac 多出一个网卡、`adb devices` 空了。
+
+既然手机已经和 Mac 同在一个网段，就让 adb 也走这条链路，USB 口彻底不参与：
+
+```bash
+pixelforge tcpip --device <serial>      # 最后一次用到数据线
+pixelforge connect 192.168.2.5:5555     # 地址由上一条命令打印出来
+pixelforge devices                      # 拔掉线，设备仍在
+```
+
+界面上的连接面板做的是同一件事。Android 11+ 也可以跳过第一步，直接用系统
+设置里"无线调试"给出的配对地址。断开用 `pixelforge disconnect <地址>`。
+
 ### 部署形态
 
 **本地优先的 Web 应用**——浏览器界面 + Python 服务，但服务必须跑在能物理接触到
