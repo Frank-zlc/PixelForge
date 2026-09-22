@@ -9,20 +9,29 @@
 
 ## 进度
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| **P0** | adb 客户端 · 设备注册 · 独占租约 | ✅ |
-| **P1** | scrcpy 协议编解码 · 视频流解复用 · 会话管理 | ✅ |
-| **P2** | CoordinateMapper 四坐标空间 · 控制通道 | ✅ |
-| **P3** | 无损截图双模式 · 框选裁剪 · 模板库 | ✅ |
-| **P4** | UiAutomator2 · 模板匹配 · OCR · 四策略降级链 · FLAG_SECURE 诊断 | ✅ |
-| **P5** | Step/Target/Project 模型 · 执行器 · 录制 | ✅ |
-| **P6** | 断点 · 单步 · 人工接管 · 步骤时间线 | ✅ |
-| **P7** | Exporter 插件机制（原生 / pytest / 第三方插件） | ✅ |
-| **P8** | Listener 插件 · logcat · 统一时间线 | ✅ |
-| **P9** | 前端 IDE · API 装配 · 部署 | ✅ |
+两列状态，因为它们是两件不同的事。**代码**＝写完且有单元测试；**真机**＝在
+实际手机上跑通过。所有单元测试用的都是假 adb server、合成帧、构造出来的协议
+字节——它们能证明代码符合我对协议的理解，不能证明真机上能用。
 
-**测试：370 项，全部通过。** 未在真机上跑过 —— 需要你接上手机验收，清单见下。
+| 阶段 | 内容 | 代码 | 真机 |
+|------|------|------|------|
+| **P0** | adb 客户端 · 设备注册 · 独占租约 | ✅ | ⬜ |
+| **P1** | scrcpy 协议编解码 · 视频流解复用 · 会话管理 | ✅ | ⬜ |
+| **P2** | CoordinateMapper 四坐标空间 · 控制通道 | ✅ | ⬜ |
+| **P3** | 无损截图双模式 · 框选裁剪 · 模板库 | ✅ | ⬜ |
+| **P4** | UiAutomator2 · 模板匹配 · OCR · 四策略降级链 · FLAG_SECURE 诊断 | ✅ | ⬜ |
+| **P5** | Step/Target/Project 模型 · 执行器 · 录制 | ✅ | ⬜ |
+| **P6** | 断点 · 单步 · 人工接管 · 步骤时间线 | ✅ | ⬜ |
+| **P7** | Exporter 插件机制（原生 / pytest / 第三方插件） | ✅ | ⬜ |
+| **P8** | Listener 插件 · logcat · 统一时间线 | ✅ | ⬜ |
+| **P9** | 前端 IDE · API 装配 · 部署 | ✅ | ⬜ |
+
+**单元测试 374 项全通过，真机验收 0 项。** 这两个数字之间的差距就是本项目
+当前的真实风险：投屏、点击、取材、控件反查这些核心路径，一次都没在真手机上
+执行过。`vendor/scrcpy-server.jar` 和 uiautomator2 APK 也从未装入过，所以
+P1/P4 的设备侧代码是纯静态的。
+
+**别把"代码 ✅"当成功能可用。** 验收清单见下，第 3、4 条是成败点。
 
 ---
 
@@ -60,11 +69,11 @@ cp .env.example .env
 ```bash
 # 实时投屏 + 低延迟控制（推荐装）
 # 去 https://github.com/Genymobile/scrcpy/releases 下载对应版本的 scrcpy-server.jar
-# 放在 vendor/scrcpy-server.jar
+# 放在 backend/vendor/scrcpy-server.jar（vendor 在 backend 下，不是仓库根）
 
 # 控件选择器（可选）
 # 去 https://github.com/appium/appium-uiautomator2-server/releases 下载 .apk
-# 存到 vendor/ 目录即可
+# 存到 backend/vendor/ 即可
 
 # OCR 定位（可选，macOS 用 brew）
 brew install tesseract tesseract-lang
@@ -104,22 +113,6 @@ pixelforge connect 192.168.2.5:5555
 pixelforge disconnect 192.168.2.5:5555
 ```
 
-要改用 DeviceFarmer/STF 设备池，在 `backend/.env` 配置：
-
-```dotenv
-PIXELFORGE_DEVICE_PROVIDER=devicefarmer
-PIXELFORGE_DEVICEFARMER_URL=https://devices.example.com
-PIXELFORGE_DEVICEFARMER_ACCESS_TOKEN=replace-with-minimal-api-token
-```
-
-PixelForge 使用 DeviceFarmer 的公开 API 获取设备、预约/续租，并通过
-`remoteConnect` 返回的地址执行 `adb connect`。Token 只在后端读取。建议锁定
-DeviceFarmer/STF `v3.7.9`；边缘节点共享 ADB 时也支持直接使用同一 serial。
-
-项目默认启用 `logcat` 监听。获取设备后监听器随会话启动，日志进入底部统一时间线；
-项目 JSON 的 `listeners` 可关闭或传入过滤选项。`mitmproxy` 和 `pcap` 目前仍会如实显示为
-`planned`，不会伪装成已经接通的网络协议监听。
-
 > ⚠️ **只能单 worker 运行。** 设备会话、scrcpy 连接、租约、运行中的脚本都是进程内状态。
 > `--workers N` 会让请求随机落到没有该设备会话的进程上，症状是"能用，但偶尔莫名 409"。
 
@@ -130,7 +123,7 @@ DeviceFarmer/STF `v3.7.9`；边缘节点共享 ADB 时也支持直接使用同�
 | 依赖 | 缺失时失去 | 仍可用 | 获取方式 |
 |------|-----------|--------|---------|
 | **adb** | 全部设备功能 | —（唯一致命的） | `brew install android-platform-tools` |
-| `vendor/scrcpy-server.jar` | 实时画面、低延迟控制 | 截图、控件树、OCR、模板 | scrcpy releases 里对应版本的 jar |
+| `backend/vendor/scrcpy-server.jar` | 实时画面、低延迟控制 | 截图、控件树、OCR、模板 | scrcpy releases 里对应版本的 jar |
 | `uiautomator2-server*.apk` | 控件选择器 | 模板、OCR、坐标 | appium-uiautomator2-server releases |
 | `tesseract` | OCR 定位 | 控件、模板、坐标 | `brew install tesseract tesseract-lang` |
 
@@ -218,8 +211,8 @@ pixelforge tcpip --device <SERIAL> [--port 5555]
 # 启用无线调试，显示 IP
 pixelforge tcpip --device a1b2c3d4
 
-# 使用非标准端口
-pixelforge tcpip --device a1b2c3d4 --port 5037
+# 换个端口（一台机器上同时挂多台设备时避免撞车）
+pixelforge tcpip --device a1b2c3d4 --port 5556
 ```
 
 ### `connect` —— 连接无线设备
@@ -335,8 +328,10 @@ PIXELFORGE_ADB_EXECUTABLE=/opt/android-sdk/platform-tools/adb
 # adb server 主机（容器化部署时用，默认 127.0.0.1）
 PIXELFORGE_ADB_SERVER_HOST=host.docker.internal
 
-# adb server 端口（默认 5037）
-PIXELFORGE_ADB_SERVER_PORT=5037
+# adb server 端口（默认 5038，不是 5037）
+# 5037 是机器级单例，任何别的工具（Android Studio、另一个 adb）都能把它重启掉，
+# 连带掀翻正在跑的会话。改成 5037 等于主动放弃这层隔离。
+PIXELFORGE_ADB_SERVER_PORT=5038
 
 # adb 命令超时（秒，默认 15）
 PIXELFORGE_ADB_TIMEOUT_S=30
@@ -344,14 +339,12 @@ PIXELFORGE_ADB_TIMEOUT_S=30
 # 数据目录（项目、模板、截图，默认 .pixelforge/）
 PIXELFORGE_DATA_DIR=~/.pixelforge
 
-# 框选 PNG 的默认保存目录（默认 PixelForge 项目根目录）
-PIXELFORGE_ASSET_DIR=~/Desktop/PixelForgeAssets
-
 # 租约过期时间（秒，默认 30）
 PIXELFORGE_LEASE_TTL_S=60
 
-# 导出插件目录（多个用 : 分隔）
-PIXELFORGE_EXPORTER_PLUGINS=/path/to/plugins1:/path/to/plugins2
+# 导出插件目录。列表型配置必须写 JSON 数组——pydantic-settings 对 list 字段
+# 只认 JSON，冒号或逗号分隔会在启动时抛 SettingsError 直接起不来。
+PIXELFORGE_EXPORTER_PLUGINS=["/path/to/plugins1","~/plugins2"]
 
 # Web 服务主机（默认 127.0.0.1）
 PIXELFORGE_HOST=0.0.0.0
@@ -359,8 +352,8 @@ PIXELFORGE_HOST=0.0.0.0
 # Web 服务端口（默认 8420）
 PIXELFORGE_PORT=9000
 
-# CORS 源地址（默认 http://localhost:5173）
-PIXELFORGE_CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+# CORS 源地址（默认 ["http://localhost:5173"]）。同上，必须是 JSON 数组。
+PIXELFORGE_CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
 
 # 前端目录（默认自动搜索 frontend/）
 PIXELFORGE_FRONTEND_DIR=~/my-frontend-build
@@ -395,7 +388,68 @@ pixelforge serve
 ### 受限网络环境
 
 如果 `pip install` 报 403 或找不到包，说明出口策略拦了 PyPI。
-`scripts/bootstrap-offline.sh` 从 GitHub 源码装纯 Python 依赖（本项目就是这么开发的）。
+`bash scripts/bootstrap-offline.sh` 从 GitHub 源码装纯 Python 依赖（本项目就是这么开发的）。
+
+## 常见问题与故障排除
+
+### 启动问题
+
+**Q: `pixelforge serve` 报错 "adb not found"**
+- A: 需要安装 Android 开发工具包。macOS: `brew install android-platform-tools`；Linux: `apt install adb`
+
+**Q: 访问 http://127.0.0.1:8420/ 显示 404**
+- A: 可能是前端文件未找到。运行 `pixelforge doctor` 检查 `frontend` 能力。确保 `frontend/` 目录存在且有 `index.html`。
+
+**Q: 启动时报 "no space left on device"**
+- A: 检查数据目录是否满盘。默认存在 `.pixelforge/` 下，可通过 `PIXELFORGE_DATA_DIR` 改到其他位置。
+
+### 设备连接问题
+
+**Q: `pixelforge devices` 显示空列表或设备显示 "unauthorized"**
+- A: 检查设备是否开启 USB 调试：设置 → 开发者选项 → USB 调试。第一次连接会弹授权提示，点击"始终允许"。
+
+**Q: USB 中途掉线，无法重新发现设备**
+- A: 用无线调试替代。先连一次 USB，运行：
+  ```bash
+  pixelforge tcpip --device <serial>
+  pixelforge connect <IP>:5555
+  ```
+
+**Q: 手机接 Mac 热点后扫不到设备**
+- A: MIUI 开了"USB 网络共享"会把 adb 从 USB 配置摘掉。关掉"设置 → 更多连接方式 → USB 网络共享"，或直接用无线 adb。
+
+### 功能缺失
+
+**Q: 为什么没有实时投屏？**
+- A: 需要 scrcpy-server.jar。去 https://github.com/Genymobile/scrcpy/releases 下载对应版本，放在 `backend/vendor/scrcpy-server.jar`，然后重启。
+
+**Q: 为什么截图功能灰了？**
+- A: 通常是 `backend/vendor/scrcpy-server.jar` 缺失。运行 `pixelforge doctor` 看具体是什么缺了。
+
+**Q: OCR 定位不工作**
+- A: 需要 Tesseract。macOS: `brew install tesseract tesseract-lang`；Linux: `apt install tesseract-ocr`。装好后重启服务。
+
+### 性能问题
+
+**Q: 操作延迟很高（响应慢）**
+- A: 检查：
+  1. 网络延迟：`ping <device_ip>` 看是否 >100ms
+  2. 视频编码：投屏画质设得太高会占用设备 CPU，试试降低分辨率
+  3. 设备性能：老设备可能吃不消实时投屏 + 录制
+
+**Q: 内存占用很大**
+- A: 检查 `pixelforge run` 是否卡住（没正常退出）。这会让前面执行器的内存泄漏（进程内状态）。
+
+### 脚本执行
+
+**Q: `pixelforge run` 报 "device not found"**
+- A: 确保设备在线（`pixelforge devices` 看得到），且 serial 拼对了。
+
+**Q: 脚本执行到一半停止，没有错误信息**
+- A: 设置 `PIXELFORGE_LOG_LEVEL=DEBUG` 看详细日志，或在 IDE 里加断点调试。
+
+**Q: 导出的 pytest 脚本在 CI 里跑失败**
+- A: 导出的脚本仍需要运行时指定设备（通过 `--device` 环境变量或 adb serial）。参考生成脚本的注释。
 
 ## 测试
 
