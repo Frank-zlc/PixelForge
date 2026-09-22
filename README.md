@@ -336,8 +336,24 @@ PIXELFORGE_ADB_SERVER_PORT=5038
 # adb 命令超时（秒，默认 15）
 PIXELFORGE_ADB_TIMEOUT_S=30
 
-# 数据目录（项目、模板、截图，默认 .pixelforge/）
+# --- 设备来源 ---------------------------------------------------------------
+# local（默认，本机 USB/无线 adb）或 devicefarmer（接 STF 设备池）
+PIXELFORGE_DEVICE_PROVIDER=local
+
+# 选 devicefarmer 时才需要这四项
+PIXELFORGE_DEVICEFARMER_URL=https://stf.example.com
+PIXELFORGE_DEVICEFARMER_ACCESS_TOKEN=<token>
+PIXELFORGE_DEVICEFARMER_POLL_INTERVAL_S=3.0
+PIXELFORGE_DEVICEFARMER_VERIFY_SSL=true
+
+# --- 存储 -------------------------------------------------------------------
+# 数据目录（项目、模板、截图，默认 backend/.pixelforge/）
 PIXELFORGE_DATA_DIR=~/.pixelforge
+
+# 框选 PNG 的默认保存目录（默认 PixelForge 项目根目录）
+# ⚠️ 默认值落在仓库里，裁出来的图会进工作树，容易被误提交
+#    （仓库里那个 statice/crop_*.png 就是这么来的）。建议指到仓库外面。
+PIXELFORGE_ASSET_DIR=~/Desktop/PixelForgeAssets
 
 # 租约过期时间（秒，默认 30）
 PIXELFORGE_LEASE_TTL_S=60
