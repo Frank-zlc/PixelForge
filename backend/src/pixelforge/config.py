@@ -32,6 +32,9 @@ def _repo_root() -> Path:
 
 
 _REPO_ROOT = _repo_root()
+_DEFAULT_ASSET_DIR = (
+    _REPO_ROOT.parent if (_REPO_ROOT / "pyproject.toml").is_file() else Path.cwd()
+)
 
 
 class Settings(BaseSettings):
@@ -80,11 +83,11 @@ class Settings(BaseSettings):
 
     # --- storage -------------------------------------------------------------
     data_dir: Path = Field(default=_REPO_ROOT / ".pixelforge")
-    asset_dir: Path | None = Field(
-        default=None,
+    asset_dir: Path = Field(
+        default=_DEFAULT_ASSET_DIR,
         description=(
-            "Directory for standalone cropped PNG assets. Defaults to "
-            "<data_dir>/assets; set PIXELFORGE_ASSET_DIR to choose another root."
+            "Directory for standalone cropped PNG assets. Defaults to the "
+            "PixelForge project root; set PIXELFORGE_ASSET_DIR to override it."
         ),
     )
 
@@ -114,8 +117,8 @@ class Settings(BaseSettings):
 
     @field_validator("data_dir", "asset_dir")
     @classmethod
-    def _expand(cls, value: Path | None) -> Path | None:
-        return value.expanduser() if value is not None else None
+    def _expand(cls, value: Path) -> Path:
+        return value.expanduser()
 
     @field_validator("exporter_plugins")
     @classmethod
@@ -164,7 +167,7 @@ class Settings(BaseSettings):
 
     @property
     def assets_dir(self) -> Path:
-        return self.asset_dir or self.data_dir / "assets"
+        return self.asset_dir
 
     @property
     def vendor_dir(self) -> Path:

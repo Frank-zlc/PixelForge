@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from pixelforge.api.capture import _asset_output_path
+from pixelforge.api.capture import CropRequest, _asset_output_path
 from pixelforge.config import Settings
 from pixelforge.main import build_app
 from pixelforge.store.projects import ProjectStore
@@ -68,6 +68,26 @@ class TestProjectStore:
         with pytest.raises(HTTPException, match="relative path"):
             _asset_output_path(tmp_path / "assets", "../outside", "hide")
 
+    def test_crop_filename_accepts_unicode_and_strips_png_suffix(self) -> None:
+        crop = CropRequest(
+            token="t",
+            name="物品列表.png",
+            x=0,
+            y=0,
+            width=10,
+            height=10,
+        )
+        assert crop.name == "物品列表"
+        with pytest.raises(ValueError, match="unsafe"):
+            CropRequest(
+                token="t",
+                name="../outside",
+                x=0,
+                y=0,
+                width=10,
+                height=10,
+            )
+
     def test_writes_are_atomic(self, store: ProjectStore) -> None:
         # A temp file plus rename means an interrupted save cannot leave a
         # truncated script behind.
@@ -87,6 +107,7 @@ def client(tmp_path: Path):
     settings = Settings(
         adb_executable="adb-absent",
         data_dir=tmp_path,
+        asset_dir=tmp_path,
         log_level="ERROR",
     )
     with TestClient(build_app(settings)) as test_client:
@@ -108,7 +129,7 @@ class TestApi:
     def test_storage_reports_the_real_asset_directory(self, client, tmp_path: Path) -> None:
         payload = client.get("/api/storage").json()
         assert payload == {
-            "asset_root": str((tmp_path / "assets").resolve()),
+            "asset_root": str(tmp_path.resolve()),
             "project_templates": None,
         }
 
@@ -181,6 +202,9 @@ class TestApi:
             ("/api/devices/X/tap", {"token": "t", "x": 1, "y": 1}),
             ("/api/devices/X/swipe", {
                 "token": "t", "x1": 1, "y1": 1, "x2": 2, "y2": 2,
+            }),
+            ("/api/devices/X/crop-image", {
+                "token": "t", "x": 1, "y": 1, "width": 2, "height": 2,
             }),
             ("/api/devices/X/key", {"token": "t", "keycode": 4}),
             ("/api/devices/X/text", {"token": "t", "text": "hi"}),

@@ -33,6 +33,8 @@ const state = {
   controlSocket: null,
   controlReady: false,
   storage: null,
+  saveDirectoryHandle: null,
+  saveDirectoryRestored: false,
 };
 
 const player = new Player($('screen'), onPlayerStatus);
@@ -858,9 +860,53 @@ async function swipeAt(start, end, durationMs) {
 
 // ---------------------------------------------------------------- templates
 
-async function loadStorage() {
+const SAVE_DIRECTORY_DB = 'pixelforge-preferences';
+const SAVE_DIRECTORY_STORE = 'handles';
+
+function openPreferenceDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(SAVE_DIRECTORY_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(SAVE_DIRECTORY_STORE)) {
+        request.result.createObjectStore(SAVE_DIRECTORY_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storedDirectoryHandle(value) {
+  const db = await openPreferenceDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(SAVE_DIRECTORY_STORE, 'readwrite');
+    const store = transaction.objectStore(SAVE_DIRECTORY_STORE);
+    const request = value === undefined
+      ? store.get('crop-directory')
+      : value === null
+        ? store.delete('crop-directory')
+        : store.put(value, 'crop-directory');
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+async function restoreSaveDirectory() {
+  if (state.saveDirectoryRestored) return;
+  state.saveDirectoryRestored = true;
   try {
-    state.storage = await api.storage(state.project?.id);
+    const handle = await storedDirectoryHandle(undefined);
+    if (handle?.kind === 'directory') state.saveDirectoryHandle = handle;
+  } catch {
+    // IndexedDB or persisted file handles may be unavailable in private mode.
+  }
+}
+
+async function loadStorage() {
+  await restoreSaveDirectory();
+  try {
+    state.storage = await api.storage();
   } catch (error) {
     state.storage = null;
     $('template-result').innerHTML =
@@ -870,65 +916,125 @@ async function loadStorage() {
 }
 
 function syncStoragePanel() {
-  const destination = $('save-destination').value;
-  const projectMode = destination === 'project';
-  const projectOption = $('save-destination').querySelector('option[value="project"]');
-  projectOption.disabled = !state.project;
-  if (projectMode && !state.project) {
-    $('save-destination').value = 'assets';
-  }
-  const actualProjectMode = $('save-destination').value === 'project';
-  const path = actualProjectMode
-    ? state.storage?.project_templates
-    : state.storage?.asset_root;
+  const handle = state.saveDirectoryHandle;
+  const path = handle ? `系统目录：${handle.name}` : state.storage?.asset_root;
   $('save-path').value = path || '';
   $('save-path').title = path || '保存目录不可用';
-  $('asset-subdir').disabled = actualProjectMode;
+  $('reset-save-directory').disabled = !handle;
+  const pickerSupported = typeof window.showDirectoryPicker === 'function';
+  $('choose-save-directory').disabled = !pickerSupported;
+  $('choose-save-directory').title = pickerSupported
+    ? '打开系统目录选择器，并记住这个位置'
+    : '当前浏览器不支持系统目录选择器，请使用 Chrome 或 Edge';
   const canSave = Boolean(
     state.selection &&
     state.session?.capabilities?.screenshot &&
-    path &&
-    (!actualProjectMode || state.project),
+    path,
   );
   $('save-template').disabled = !canSave;
 }
 
-$('save-destination').onchange = syncStoragePanel;
+$('choose-save-directory').onclick = async () => {
+  if (typeof window.showDirectoryPicker !== 'function') {
+    toast('当前浏览器不支持系统目录选择器，请使用 Chrome 或 Edge');
+    return;
+  }
+  try {
+    const options = { id: 'pixelforge-crops', mode: 'readwrite' };
+    if (state.saveDirectoryHandle) options.startIn = state.saveDirectoryHandle;
+    const handle = await window.showDirectoryPicker(options);
+    state.saveDirectoryHandle = handle;
+    await storedDirectoryHandle(handle).catch(() => null);
+    syncStoragePanel();
+  } catch (error) {
+    if (error.name !== 'AbortError') toast(`选择目录失败：${error.message}`);
+  }
+};
+
+$('reset-save-directory').onclick = async () => {
+  state.saveDirectoryHandle = null;
+  await storedDirectoryHandle(null).catch(() => null);
+  syncStoragePanel();
+};
+
+function automaticCropName() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const stamp =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const random = crypto.getRandomValues(new Uint16Array(1))[0].toString(16).padStart(4, '0');
+  return `crop_${stamp}_${random}`;
+}
+
+function cropFileStem() {
+  let name = $('template-name').value.trim();
+  if (name.toLowerCase().endsWith('.png')) name = name.slice(0, -4).trim();
+  if (!name) return automaticCropName();
+  if (/[<>:"/\\|?*\u0000-\u001f]/.test(name) || name === '.' || name === '..') {
+    throw new Error('文件名不能包含 < > : " / \\ | ? *');
+  }
+  return name;
+}
+
+function cropRequestBody(selection) {
+  return {
+    token: state.session.token,
+    x: selection.x,
+    y: selection.y,
+    width: selection.width,
+    height: selection.height,
+    space: 'device',
+  };
+}
+
+async function saveToSystemDirectory(handle, name, selection) {
+  const permission = await handle.queryPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') {
+    const granted = await handle.requestPermission({ mode: 'readwrite' });
+    if (granted !== 'granted') throw new Error('没有所选目录的写入权限');
+  }
+  const capture = await api.cropImage(state.selected, cropRequestBody(selection));
+  const fileName = `${name}.png`;
+  const file = await handle.getFileHandle(fileName, { create: true });
+  const writer = await file.createWritable();
+  try {
+    await writer.write(capture.blob);
+  } finally {
+    await writer.close();
+  }
+  return {
+    path: `系统目录/${handle.name}/${fileName}`,
+    width: capture.width || selection.width,
+    height: capture.height || selection.height,
+  };
+}
 
 $('save-template').onclick = async () => {
   if (!state.selection || !state.session) {
     toast('先用「框选取材」在画面上拖一个区域');
     return;
   }
-  const name = $('template-name').value.trim();
-  if (!name) {
-    toast('给模板起个名字');
-    return;
-  }
-  const projectMode = $('save-destination').value === 'project';
-  if (projectMode && !state.project) {
-    toast('“项目模板”需要先选择或新建一个项目');
-    return;
-  }
   try {
-    const result = await api.crop(state.selected, {
-      token: state.session.token,
-      project_id: projectMode ? state.project.id : null,
-      folder: projectMode ? null : ($('asset-subdir').value.trim() || null),
-      name,
-      x: state.selection.x,
-      y: state.selection.y,
-      width: state.selection.width,
-      height: state.selection.height,
-      space: 'device',
-    });
+    const name = cropFileStem();
+    const selection = { ...state.selection };
+    const handle = state.saveDirectoryHandle;
+    const saved = handle
+      ? await saveToSystemDirectory(handle, name, selection)
+      : await api.crop(state.selected, {
+          ...cropRequestBody(selection),
+          project_id: null,
+          folder: null,
+          name,
+        });
+    const path = handle ? saved.path : `${saved.directory}/${saved.file}`;
     $('template-result').innerHTML =
-      `<div><span>已保存</span><span>${escapeHtml(`${result.directory}/${result.file}`)}</span></div>` +
-      `<div><span>用途</span><span>${result.destination === 'project_template' ? '项目模板' : '独立素材'}</span></div>` +
-      `<div><span>像素</span><span>${result.width}×${result.height}</span></div>` +
-      `<div><span>device</span><span>${result.device_rect.join(', ')}</span></div>` +
-      `<div><span>中心 norm</span><span>${result.center_norm.map((v) => v.toFixed(4)).join(', ')}</span></div>` +
-      (result.warning ? `<div class="note">${escapeHtml(result.warning)}</div>` : '');
+      `<div><span>已保存</span><span>${escapeHtml(path)}</span></div>` +
+      `<div><span>文件名</span><span>${escapeHtml(`${name}.png`)}</span></div>` +
+      `<div><span>像素</span><span>${saved.width}×${saved.height}</span></div>` +
+      `<div><span>device</span><span>${selection.x}, ${selection.y}, ` +
+      `${selection.width}, ${selection.height}</span></div>` +
+      (saved.warning ? `<div class="note">${escapeHtml(saved.warning)}</div>` : '');
   } catch (error) {
     toast(`取材失败：${error.message}`);
   }

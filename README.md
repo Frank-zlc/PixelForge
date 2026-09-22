@@ -344,7 +344,7 @@ PIXELFORGE_ADB_TIMEOUT_S=30
 # 数据目录（项目、模板、截图，默认 .pixelforge/）
 PIXELFORGE_DATA_DIR=~/.pixelforge
 
-# 独立框选 PNG 的保存根目录（默认 ${PIXELFORGE_DATA_DIR}/assets）
+# 框选 PNG 的默认保存目录（默认 PixelForge 项目根目录）
 PIXELFORGE_ASSET_DIR=~/Desktop/PixelForgeAssets
 
 # 租约过期时间（秒，默认 30）

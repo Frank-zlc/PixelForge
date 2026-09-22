@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from pixelforge.api.deps import (
     LeasesDep,
@@ -44,15 +44,8 @@ class CaptureRequest(BaseModel):
     fresh: bool = True
 
 
-class CropRequest(BaseModel):
+class CropRegion(BaseModel):
     token: str = Field(min_length=1, max_length=64)
-    project_id: str | None = Field(default=None, min_length=1, max_length=64)
-    folder: str | None = Field(
-        default=None,
-        max_length=240,
-        description="Relative folder below the configured standalone asset root.",
-    )
-    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     x: float
     y: float
     width: float = Field(gt=0)
@@ -62,6 +55,28 @@ class CropRequest(BaseModel):
     # there is no way to undo the letterboxing.
     element_width: int | None = Field(default=None, gt=0)
     element_height: int | None = Field(default=None, gt=0)
+
+
+class CropRequest(CropRegion):
+    project_id: str | None = Field(default=None, min_length=1, max_length=64)
+    folder: str | None = Field(default=None, max_length=240)
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, value: str) -> str:
+        value = value.strip()
+        if value.lower().endswith(".png"):
+            value = value[:-4].rstrip()
+        forbidden = '<>:"/\\|?*'
+        if (
+            not value
+            or value in {".", ".."}
+            or value.endswith((".", " "))
+            or any(char in forbidden or ord(char) < 32 for char in value)
+        ):
+            raise ValueError("name contains characters that are unsafe in a file name")
+        return value
 
 
 class CropResponse(BaseModel):
@@ -131,6 +146,53 @@ async def capture(
     )
 
 
+async def _crop_region(session, body: CropRegion):
+    mapper = session.mapper
+    if body.space is Space.CSS:
+        if body.element_width is None or body.element_height is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "a CSS-space selection needs element_width and element_height; "
+                "without them the letterbox offset cannot be removed",
+            )
+        mapper = mapper.with_(element=Size(body.element_width, body.element_height))
+
+    selection = Rect(
+        x=int(body.x), y=int(body.y), width=int(body.width), height=int(body.height)
+    )
+    device_rect = (
+        selection
+        if body.space is Space.DEVICE
+        else mapper.convert_rect(selection, body.space, Space.DEVICE)
+    )
+    try:
+        return await session.crop(device_rect, Space.DEVICE), device_rect
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+@router.post("/{serial}/crop-image")
+async def crop_image(
+    serial: str,
+    body: CropRegion,
+    leases: LeasesDep,
+    sessions: SessionsDep,
+) -> Response:
+    """Return a selected lossless PNG for the browser's system directory picker."""
+    require_lease(leases, serial, body.token)
+    session = require_session(sessions, serial)
+    pixels, device_rect = await _crop_region(session, body)
+    return Response(
+        content=_encode_png(pixels),
+        media_type="image/png",
+        headers={
+            "X-PixelForge-Width": str(device_rect.width),
+            "X-PixelForge-Height": str(device_rect.height),
+            "X-PixelForge-Lossless": "1",
+        },
+    )
+
+
 @router.post("/{serial}/crop", response_model=CropResponse)
 async def crop(
     serial: str,
@@ -142,47 +204,17 @@ async def crop(
 ) -> CropResponse:
     require_lease(leases, serial, body.token)
     session = require_session(sessions, serial)
-
-    mapper = session.mapper
-    if body.space is Space.CSS:
-        if body.element_width is None or body.element_height is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "a CSS-space selection needs element_width and element_height; "
-                "without them the letterbox offset cannot be removed",
-            )
-        mapper = mapper.with_(
-            element=Size(body.element_width, body.element_height)
-        )
-
-    selection = Rect(
-        x=int(body.x), y=int(body.y), width=int(body.width), height=int(body.height)
-    )
-    device_rect = (
-        selection
-        if body.space is Space.DEVICE
-        else mapper.convert_rect(selection, body.space, Space.DEVICE)
-    )
-
-    try:
-        pixels = await session.crop(device_rect, Space.DEVICE)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-    import cv2
-
-    ok, encoded = cv2.imencode(".png", cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR))
-    if not ok:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "could not encode the crop")
+    pixels, device_rect = await _crop_region(session, body)
+    encoded = _encode_png(pixels)
     if body.project_id:
         try:
-            path = store.save_template(body.project_id, body.name, encoded.tobytes())
+            path = store.save_template(body.project_id, body.name, encoded)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
         destination = "project_template"
     else:
         path = _asset_output_path(settings.assets_dir, body.folder, body.name)
-        path.write_bytes(encoded.tobytes())
+        path.write_bytes(encoded)
         destination = "asset"
 
     display = session.display

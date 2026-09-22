@@ -98,6 +98,8 @@ export const api = {
     requestImage('POST', `/api/devices/${encodeURIComponent(serial)}/capture`, { token, fresh }),
   crop: (serial, body) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/crop`, body),
+  cropImage: (serial, body) =>
+    requestImage('POST', `/api/devices/${encodeURIComponent(serial)}/crop-image`, body),
   hierarchy: (serial, token) =>
     request('POST', `/api/devices/${encodeURIComponent(serial)}/hierarchy`, { token }),
   diagnose: (serial, token) =>

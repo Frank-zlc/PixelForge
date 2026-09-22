@@ -85,17 +85,12 @@
       <button id="clear-selection" disabled>清除</button>
     </div>
     <div class="row" style="gap:6px;margin-bottom:6px">
-      <select id="save-destination" style="width:118px">
-        <option value="assets">素材目录</option>
-        <option value="project">项目模板</option>
-      </select>
       <input id="save-path" class="grow path-field" readonly placeholder="正在读取保存目录…" title="实际保存目录">
+      <button id="choose-save-directory">选择目录</button>
+      <button id="reset-save-directory" disabled>默认</button>
     </div>
     <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="asset-subdir" placeholder="相对子目录（可选，如 albion/items）" class="grow">
-    </div>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="template-name" placeholder="模板名（字母数字-_）" class="grow">
+      <input id="template-name" placeholder="文件名（可留空，自动生成）" class="grow">
       <button id="save-template" disabled>保存区域 PNG</button>
     </div>
     <div id="template-result" class="kv"></div>
