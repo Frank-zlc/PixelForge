@@ -13,9 +13,20 @@ devices from one event loop:
    ``Sequence[str]`` and refuses a bare ``str``, so there is no code path where
    a template-derived value reaches ``sh -c``.
 
-The client also pins its own adb server port. The default ``127.0.0.1:5037`` is
-a machine-wide singleton: anyone opening Android Studio, or any tool running
-``adb kill-server``, drops every session PixelForge holds.
+The server port is configurable, and the default is the machine-wide
+``127.0.0.1:5037`` on purpose. A private port sounds safer -- nobody else's
+``adb kill-server`` can drop our sessions -- but it loses a race that matters
+more: **a USB device can only be claimed by one adb server at a time.** The
+moment anything else starts the default server (a terminal, Android Studio,
+scrcpy), a private server sees an empty device list and there is nothing
+PixelForge can do about it from its side.
+
+The two failure modes are not symmetric. A server someone killed is recoverable
+-- the tracker reconnects and calls ``start-server``. A USB claim lost to
+another server is not: it needs a human to go and kill that other server. So we
+share the default port and take the interruptions, which we can heal.
+Set ``PIXELFORGE_ADB_SERVER_PORT`` for an isolated server when the machine is
+known to have no other adb around (a container, CI).
 """
 
 from __future__ import annotations
@@ -95,7 +106,8 @@ class AdbClient:
         relying on ``$PATH``: a version mismatch between two adb binaries makes
         them kill each other's servers.
     server_port:
-        Port for this client's private adb server. Passed as ``-P``.
+        Port of the adb server to use. Passed as ``-P``. Defaults to the
+        machine-wide 5037 -- see the module docstring for why sharing wins.
     timeout:
         Default per-invocation timeout in seconds.
     """
@@ -105,7 +117,7 @@ class AdbClient:
         executable: str | Path = "adb",
         *,
         server_host: str = "127.0.0.1",
-        server_port: int = 5038,
+        server_port: int = 5037,
         timeout: float = 15.0,
     ) -> None:
         if not 1 <= server_port <= 65535:

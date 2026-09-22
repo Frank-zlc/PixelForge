@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>图片工具目录 · PixelForge</title>
+  <link rel="stylesheet" href="tools.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><nav><a href="./">设备工作台</a> · <a href="assets.html">图片素材库</a></nav><h1>图片工具目录</h1><p>查看功能效果，选择本地图片试运行。</p></div>
+    <div id="counts" class="counts">正在读取功能…</div>
+  </header>
+  <main>
+    <section class="catalog panel" aria-labelledby="catalog-title">
+      <div class="section-head"><h2 id="catalog-title">功能列表</h2><select id="category"><option value="">全部类别</option></select></div>
+      <input id="tool-search" class="tool-search" type="search" placeholder="搜索功能、介绍或函数名" aria-label="搜索图片工具">
+      <div id="cards" class="cards"></div>
+    </section>
+    <section class="workbench panel" aria-labelledby="workbench-title">
+      <div class="section-head"><h2 id="workbench-title">图片工作台</h2><span id="workbench-status" role="status">无需连接设备</span></div>
+      <div class="source-actions">
+        <label class="button">打开图片<input id="open-files" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" multiple hidden></label>
+        <label class="button">打开图片目录<input id="open-directory" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" webkitdirectory multiple hidden></label>
+        <button id="use-demo" type="button">使用示例图</button>
+      </div>
+      <p class="hint">目录由浏览器读取；图片只在执行工具时发送到当前 PixelForge 服务，不会自动保存到项目。</p>
+      <div class="workspace-grid">
+        <aside class="file-panel"><strong id="file-count">图片列表</strong><div id="files" class="files"></div></aside>
+        <div class="canvas-panel">
+          <div class="image-head"><strong id="image-name">示例图</strong><span id="image-size"></span></div>
+          <div class="canvas-scroll"><canvas id="source-canvas" aria-label="原图，拖动可框选区域"></canvas></div>
+          <p class="hint">在原图上拖动框选；处理工具可作用于选区或整张图。</p>
+          <div class="region-fields">
+            <label>X<input id="roi-x" type="number" min="0"></label>
+            <label>Y<input id="roi-y" type="number" min="0"></label>
+            <label>宽<input id="roi-width" type="number" min="1"></label>
+            <label>高<input id="roi-height" type="number" min="1"></label>
+            <button id="clear-roi" type="button">使用整图</button>
+          </div>
+        </div>
+      </div>
+      <div class="run-panel">
+        <label>处理工具<select id="tool-select"></select></label>
+        <div id="tool-params" class="params"></div>
+        <button id="run-tool" type="button" class="primary">运行并预览</button>
+        <a id="tool-detail-link" href="tool.html">查看工具详情</a>
+      </div>
+      <div class="result-panel">
+        <div class="image-head"><strong>处理结果</strong><a id="download-result" hidden>下载 PNG</a></div>
+        <div id="result-empty" class="empty-result">选择工具后点击“运行并预览”</div>
+        <img id="result-image" alt="图片处理结果" hidden>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="tools.js"></script>
+</body>
+</html>

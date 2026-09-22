@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>图片素材库 · PixelForge</title>
+  <link rel="stylesheet" href="tools.css">
+  <link rel="stylesheet" href="assets.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <nav><a href="./">设备工作台</a> · <a href="tools.html">功能目录</a></nav>
+      <h1>图片素材库</h1>
+      <p>选择图片或目录，确认后导入。原图与标准化预览保存在 PixelForge 数据目录。</p>
+    </div>
+    <div id="asset-count" class="counts"></div>
+  </header>
+  <main class="asset-main">
+    <section class="panel" aria-labelledby="import-title">
+      <h2 id="import-title">导入图片</h2>
+      <div class="source-actions">
+        <label class="button">选择图片<input id="pick-files" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" multiple hidden></label>
+        <label class="button">选择目录<input id="pick-directory" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" webkitdirectory multiple hidden></label>
+        <button id="import-selected" type="button" class="primary" disabled>导入所选图片</button>
+      </div>
+      <p id="selection-summary" class="hint">尚未选择图片。</p>
+      <div id="import-status" class="hint" role="status"></div>
+    </section>
+    <section class="panel" aria-labelledby="asset-list-title">
+      <div class="section-head"><h2 id="asset-list-title">已托管素材</h2><button id="refresh-assets" type="button">刷新</button></div>
+      <div id="asset-list" class="asset-list"></div>
+    </section>
+    <section class="panel preview-panel" aria-labelledby="preview-title">
+      <h2 id="preview-title">素材预览</h2>
+      <p id="preview-meta" class="hint">从列表中选择一张图片。</p>
+      <img id="asset-preview" alt="所选图片预览" hidden>
+      <a id="process-asset" class="button" href="tools.html" hidden>用图片工具处理</a>
+      <a id="download-original" hidden>下载原图</a>
+    </section>
+  </main>
+  <script type="module" src="assets.js"></script>
+</body>
+</html>

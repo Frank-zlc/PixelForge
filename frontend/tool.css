@@ -1,0 +1,15 @@
+.detail-main { grid-template-columns:minmax(300px, .8fr) minmax(0, 1.2fr); }
+.detail-main h2 { margin:18px 0 12px; }
+.detail-main h2:first-child { margin-top:0; }
+.info-grid { display:grid; grid-template-columns:130px 1fr; gap:8px 12px; overflow-wrap:anywhere; }
+.info-grid dt { color:#9aaabb; }
+.info-grid dd { margin:0; }
+.example-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.example-grid figure { margin:0; min-width:0; }
+.example-grid img { width:100%; max-height:340px; object-fit:contain; background:#090e15; border-radius:8px; }
+.example-grid img[hidden] { display:none; }
+.example-grid figcaption { margin-top:5px; font-size:12px; color:#9aaabb; }
+.detail-main table { border-collapse:collapse; width:100%; font-size:13px; }
+.detail-main th, .detail-main td { padding:8px; border-bottom:1px solid #2b3848; text-align:left; }
+.detail-main th { color:#9aaabb; }
+@media(max-width:800px) { .detail-main { grid-template-columns:1fr; } }

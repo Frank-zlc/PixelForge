@@ -33,6 +33,7 @@ from pixelforge.device.lease import (
     LeaseSupersededError,
 )
 from pixelforge.device.models import DeviceView
+from pixelforge.script.model import ListenerConfig
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -86,7 +87,7 @@ class TcpipRequest(BaseModel):
 
 class ListenerStartRequest(BaseModel):
     token: str = Field(min_length=1, max_length=64)
-    project_id: str = Field(min_length=1, max_length=64)
+    project_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 @router.post("/connect")
@@ -343,17 +344,19 @@ async def start_listeners(
     session = sessions.get(serial)
     if session is None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"no open session for {serial}")
-    try:
-        project = store.get(body.project_id)
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    project = None
+    if body.project_id:
+        try:
+            project = store.get(body.project_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return [
         item.as_dict()
         for item in await listeners.start(
             serial,
             adb_serial=session.serial,
-            configs=project.listeners,
-            app_package=project.app_package,
+            configs=project.listeners if project else [ListenerConfig(name="logcat")],
+            app_package=project.app_package if project else None,
         )
     ]
 

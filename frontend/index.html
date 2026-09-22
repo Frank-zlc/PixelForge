@@ -13,10 +13,14 @@
 
   <section class="pane pane--devices">
     <h1>设备</h1>
+    <a href="tools.html" class="tool-page-link">图片工具目录 →</a>
+    <a href="assets.html" class="tool-page-link">图片素材库 →</a>
     <div class="row" style="margin-bottom:10px">
       <button id="refresh-devices" class="grow">刷新</button>
+      <button id="probe-adb" title="查看本机每个 adb server 各自能看到哪些设备">检测 adb</button>
     </div>
     <div id="device-list"></div>
+    <div id="adb-probe"></div>
 
     <h2>无线连接</h2>
     <p class="muted" style="font-size:12px;margin:0 0 6px">
@@ -35,12 +39,21 @@
     <div id="health" class="kv" style="margin-top:14px"></div>
   </section>
 
+  <div class="gutter gutter--x" data-track="left" role="separator" aria-orientation="vertical"
+       title="拖动调整宽度 · 双击复位"></div>
+
   <section class="pane pane--stage">
     <div class="toolbar">
       <span id="session-state" class="pill">未连接</span>
       <button id="connect" class="primary" disabled>获取设备</button>
       <button id="release" disabled>释放</button>
       <span class="grow"></span>
+      <span class="zoom-group" title="Ctrl/⌘ + 滚轮缩放 · 滚轮平移 · 空格或中键拖动 · Ctrl/⌘ 0 适应 · Ctrl/⌘ 1 实际大小">
+        <button id="zoom-out" aria-label="缩小" disabled>−</button>
+        <button id="zoom-level" class="zoom-level" title="在 100% 与适应窗口之间切换" disabled>100%</button>
+        <button id="zoom-in" aria-label="放大" disabled>+</button>
+        <button id="zoom-fit" class="is-on" disabled>适应</button>
+      </span>
       <label class="row interaction-mode" style="gap:4px" title="单击、长按或按住拖动都会发送到手机">
         <input type="radio" name="interaction-mode" id="mode-tap" checked style="width:auto"> 操作设备（点击 / 拖拽）
       </label>
@@ -64,6 +77,9 @@
       <div id="stage-empty" class="empty">选择一台设备并点击「获取设备」</div>
     </div>
   </section>
+
+  <div class="gutter gutter--x" data-track="right" role="separator" aria-orientation="vertical"
+       title="拖动调整宽度 · 双击复位"></div>
 
   <section class="pane pane--inspector">
     <h2>坐标 / 控件</h2>
@@ -106,11 +122,14 @@
 
     <h2>监听</h2>
     <div class="row" style="gap:6px;margin-bottom:6px">
-      <button id="start-listeners" class="grow" disabled>启动项目监听</button>
+      <button id="start-listeners" class="grow" disabled>启动日志监听</button>
       <button id="stop-listeners" disabled>停止</button>
     </div>
+    <div id="listener-help" class="muted" style="font-size:12px;margin-bottom:6px">
+      获取设备后可启动 logcat，默认显示警告、错误和崩溃；选择项目后使用项目配置。
+    </div>
     <div id="listener-status" class="kv">
-      <div class="muted">获取设备后按项目配置自动启动</div>
+      <div class="muted">获取设备后可启动 logcat 监听</div>
     </div>
 
     <h2>控件树</h2>
@@ -128,6 +147,7 @@
       <select id="script-select" class="grow"></select>
       <button id="new-script">新建</button>
     </div>
+    <div id="script-help" class="muted" style="font-size:12px;margin-bottom:6px"></div>
     <ul id="step-list" class="step-list"></ul>
     <div class="row" style="gap:6px;margin-top:6px">
       <button id="add-tap-step" disabled class="grow">把当前点加为 tap 步骤</button>
@@ -145,8 +165,13 @@
     <div id="export-result" class="kv"></div>
   </section>
 
+  <div class="gutter gutter--y" data-track="timeline" role="separator" aria-orientation="horizontal"
+       title="拖动调整高度 · 双击复位"></div>
+
   <section class="pane pane--timeline">
     <div class="timeline-head">
+      <button id="toggle-timeline" class="chevron" aria-expanded="true" aria-controls="timeline"
+              title="折叠时间线">▾</button>
       <strong>时间线</strong>
       <span id="run-state" class="pill">无运行</span>
       <span class="grow"></span>

@@ -30,9 +30,12 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pixelforge.adb.client import AdbClient, AdbNotFoundError
+from pixelforge.adb.probe import DEFAULT_ADB_PORT, probe_servers, recommend_port
 from pixelforge.api import capture as capture_api
 from pixelforge.api import control as control_api
 from pixelforge.api import devices as devices_api
+from pixelforge.api import image_lab as image_lab_api
+from pixelforge.api import image_tools as image_tools_api
 from pixelforge.api import projects as projects_api
 from pixelforge.api import runs as runs_api
 from pixelforge.config import Settings, get_settings
@@ -46,6 +49,7 @@ from pixelforge.exporters.registry import list_exporters, load_plugin_dir
 from pixelforge.listeners.manager import ListenerManager
 from pixelforge.store.projects import ProjectStore
 from pixelforge.timeline.bus import TimelineBus
+from pixelforge.vision.tool_catalog import ImageToolCatalog
 from pixelforge.ws import events as events_ws
 from pixelforge.ws import screen as screen_ws
 from pixelforge.ws import timeline as timeline_ws
@@ -101,6 +105,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         app.state.store = store
         app.state.bus = bus
         app.state.listeners = listeners
+        app.state.image_tools = ImageToolCatalog(config.data_dir / "image_tools.sqlite3")
+        app.state.image_lab = app.state.image_tools.store
         app.state.adb_available = False
 
         try:
@@ -160,6 +166,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     )
     for router in (
         devices_api.router,
+        image_lab_api.router,
+        image_tools_api.router,
         capture_api.router,
         control_api.router,
         projects_api.router,
@@ -186,6 +194,26 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "frontend": frontend is not None,
             },
             "exporters": [item["name"] for item in list_exporters()],
+        }
+
+    @app.get("/api/adb/probe", tags=["meta"])
+    async def adb_probe() -> dict[str, object]:
+        """Which adb server can see the phone, and which one we are using.
+
+        Exists for one failure that is otherwise unexplainable from the UI: a
+        device visible to `adb devices` in a terminal but absent here, because
+        another adb server claimed the USB transport first. Probing never starts
+        a server -- it reports the machine as it is.
+        """
+        probes = await probe_servers(
+            config.adb_server_host, [config.adb_server_port, DEFAULT_ADB_PORT]
+        )
+        return {
+            "host": config.adb_server_host,
+            "active_port": config.adb_server_port,
+            "default_port": DEFAULT_ADB_PORT,
+            "servers": [probe.as_dict() for probe in probes],
+            "recommended_port": recommend_port(probes, config.adb_server_port),
         }
 
     # The frontend is build-free static files, so it is served from the same

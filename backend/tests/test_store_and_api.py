@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,8 +11,8 @@ from fastapi.testclient import TestClient
 from pixelforge.api.capture import CropRequest, _asset_output_path
 from pixelforge.config import Settings
 from pixelforge.main import build_app
+from pixelforge.script.model import Project, Script
 from pixelforge.store.projects import ProjectStore
-from pixelforge.script.model import CoordTarget, Project, Script, Step, StepAction, Target
 
 
 @pytest.fixture
@@ -149,6 +147,16 @@ class TestApi:
         assert response.status_code == 200
         assert [s["id"] for s in response.json()["scripts"]] == ["flow"]
         assert client.delete("/api/projects/shop/scripts/flow").json()["scripts"] == []
+
+    def test_creating_existing_project_does_not_erase_scripts(self, client) -> None:
+        client.post("/api/projects", json={"id": "shop", "name": "Shop"})
+        client.put(
+            "/api/projects/shop/scripts/flow",
+            json={"id": "flow", "name": "Flow", "steps": []},
+        )
+        response = client.post("/api/projects", json={"id": "shop", "name": "Other"})
+        assert response.status_code == 409
+        assert [s["id"] for s in client.get("/api/projects/shop").json()["scripts"]] == ["flow"]
 
     def test_script_id_mismatch_is_rejected(self, client) -> None:
         client.post("/api/projects", json={"id": "shop", "name": "Shop"})

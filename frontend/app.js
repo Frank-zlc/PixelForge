@@ -10,6 +10,8 @@
 import { api, openSocket } from './api.js';
 import { Player } from './player.js';
 import * as geo from './geometry.js';
+import { Viewport } from './viewport.js';
+import { initLayout } from './layout.js';
 
 const $ = (id) => document.getElementById(id);
 const OWNER = `web-${Math.random().toString(36).slice(2, 8)}`;
@@ -42,6 +44,36 @@ const overlay = $('overlay');
 const overlayContext = overlay.getContext('2d');
 let tapFeedback = null;
 
+/**
+ * Zoom and pan live entirely in the transform on the canvas, so none of the
+ * coordinate code below has to know about them: it all measures the canvas with
+ * getBoundingClientRect(), which already includes the transform.
+ */
+const viewport = new Viewport({
+  wrap: document.querySelector('.stage-wrap'),
+  canvas: $('screen'),
+  getFrame: () => state.frame,
+  getDisplay: () => state.display,
+  onChange: () => {
+    syncOverlaySize();
+    syncZoomControls();
+    // The crosshair is re-drawn by the next pointermove. Redrawing it here from
+    // a stale cursor would put it on the wrong pixel for one frame.
+    drawOverlay(null);
+  },
+});
+
+/** Re-place the frame after anything that changed the stage or frame size. */
+function refreshViewport() {
+  viewport.refresh();
+  syncOverlaySize();
+}
+
+function syncZoomControls() {
+  $('zoom-level').textContent = viewport.label();
+  $('zoom-fit').classList.toggle('is-on', viewport.isFit);
+}
+
 // ---------------------------------------------------------------- devices
 
 async function loadDevices() {
@@ -59,8 +91,11 @@ function renderDevices() {
   host.textContent = '';
   if (!state.devices.length) {
     host.innerHTML = '<div class="muted">没有设备。用 USB 连接手机并允许调试授权。</div>';
+    // An empty list is exactly when the reason matters, so find it unprompted.
+    probeAdb({ auto: true });
     return;
   }
+  $('adb-probe').textContent = '';
   for (const device of state.devices) {
     const node = document.createElement('div');
     node.className = 'device';
@@ -97,6 +132,56 @@ function selectDevice(serial) {
     $('wireless-result').innerHTML =
       '<div class="muted">USB 已连接。要改用无线，请点“开启 5555 并自动连接”。</div>';
   }
+}
+
+// ---------------------------------------------------------------- adb probe
+
+/**
+ * An empty device list next to a terminal where `adb devices` shows a phone is
+ * the most confusing state this tool has. The cause is never visible from here:
+ * only one adb server can claim a USB device, and another one won the race. So
+ * ask every candidate port what it can see, and say so plainly.
+ */
+async function probeAdb({ auto = false } = {}) {
+  const host = $('adb-probe');
+  if (!auto) host.innerHTML = '<div class="probe"><div class="probe__head">检测中…</div></div>';
+  try {
+    renderProbe(await api.adbProbe());
+  } catch (error) {
+    host.innerHTML = auto ? '' : `<div class="note">检测失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderProbe(report) {
+  const rows = report.servers
+    .map((server) => {
+      const active = server.port === report.active_port;
+      let detail;
+      if (!server.running) detail = '没有 server 在跑';
+      else if (server.error) detail = server.error;
+      else if (!server.devices.length) detail = `adb ${server.version || '?'} · 看不到设备`;
+      else detail = `adb ${server.version || '?'} · ${server.devices.length} 台`;
+      const devices = server.devices
+        .map((d) => `<div class="probe__devices">${escapeHtml(d.serial)} · ${escapeHtml(d.state)}</div>`)
+        .join('');
+      return (
+        `<div class="probe__server" data-active="${active}">` +
+        `端口 ${server.port}${active ? ' · 当前使用' : ''}` +
+        `<div class="muted">${escapeHtml(detail)}</div>${devices}</div>`
+      );
+    })
+    .join('');
+
+  const port = report.recommended_port;
+  const verdict = port
+    ? `<div class="probe__verdict">设备正被端口 ${port} 上的另一个 adb server 占用。` +
+      '一台 USB 设备同一时刻只能被一个 adb server 独占，所以这边看不到它。二选一：' +
+      '<code>adb kill-server</code> 后点「刷新」，' +
+      `或以 <code>PIXELFORGE_ADB_SERVER_PORT=${port}</code> 重启 PixelForge。</div>`
+    : '<div class="probe__verdict probe__verdict--ok">没有别的 adb server 抢占设备。' +
+      '手机没出现的话，检查数据线、USB 调试开关，以及手机上的授权弹窗。</div>';
+
+  $('adb-probe').innerHTML = `<div class="probe"><div class="probe__head">adb server</div>${rows}${verdict}</div>`;
 }
 
 // ---------------------------------------------------------------- session
@@ -246,6 +331,9 @@ function connectControl(serial, session) {
 function setSessionControlsEnabled(enabled) {
   const caps = enabled ? state.session?.capabilities || {} : {};
   $('release').disabled = !enabled;
+  for (const id of ['zoom-in', 'zoom-out', 'zoom-fit', 'zoom-level']) {
+    $(id).disabled = !enabled;
+  }
   for (const id of ['capture-screen', 'save-screen', 'copy-screen', 'diagnose']) {
     $(id).disabled = !enabled || !caps.screenshot;
   }
@@ -257,10 +345,10 @@ function setSessionControlsEnabled(enabled) {
   $('load-hierarchy').disabled = !enabled || !caps.a11y;
   syncStoragePanel();
   $('add-tap-step').disabled = !enabled || !state.script || !state.lastPoint;
-  $('start-listeners').disabled = !enabled || !state.project;
-  $('stop-listeners').disabled = !enabled;
+  $('start-listeners').disabled = !enabled;
+  $('stop-listeners').disabled = !enabled || !state.listeners.length;
   $('connect').disabled = enabled;
-  $('run-script').disabled = !enabled || !state.script;
+  syncProjectControls();
   const selectedIsUsb = Boolean(state.selected) && !/:\d+$/.test(state.selected);
   $('wireless-tcpip').disabled = enabled || !selectedIsUsb;
 }
@@ -283,12 +371,14 @@ function renderCapabilities() {
 
 function renderListenerStatus() {
   const host = $('listener-status');
+  $('start-listeners').textContent = state.project ? '启动项目监听' : '启动日志监听';
+  $('stop-listeners').disabled = !state.session || !state.listeners.length;
   if (!state.session) {
-    host.innerHTML = '<div class="muted">获取设备后按项目配置自动启动</div>';
+    host.innerHTML = '<div class="muted">获取设备后可启动 logcat 监听</div>';
     return;
   }
   if (!state.listeners.length) {
-    host.innerHTML = '<div class="muted">当前没有运行中的监听器</div>';
+    host.innerHTML = '<div class="muted">未启动监听。点击上方按钮接收日志。</div>';
     return;
   }
   host.innerHTML = state.listeners.map((item) => {
@@ -299,14 +389,15 @@ function renderListenerStatus() {
 }
 
 $('start-listeners').onclick = async () => {
-  if (!state.session || !state.project) return;
+  if (!state.session) return;
   try {
     state.listeners = await api.startListeners(
       state.selected,
       state.session.token,
-      state.project.id,
+      state.project?.id || null,
     );
     renderListenerStatus();
+    if (!state.listeners.length) toast('当前项目没有启用的监听器');
   } catch (error) {
     toast(`启动监听失败：${error.message}`);
   }
@@ -343,7 +434,7 @@ function onPlayerStatus(status) {
     element.className = 'pill pill--warn';
     refreshScreenshot({ quiet: true });
   }
-  syncOverlaySize();
+  refreshViewport();
 }
 
 // ---------------------------------------------------------------- screenshots
@@ -370,7 +461,7 @@ async function drawScreenshot(capture) {
   const element = $('session-state');
   element.textContent = `静态截图 ${width}×${height}`;
   element.className = 'pill pill--ok';
-  syncOverlaySize();
+  refreshViewport();
   drawOverlay(null);
 }
 
@@ -618,6 +709,7 @@ function cancelPointerGesture() {
 }
 
 stageBody.addEventListener('pointermove', (event) => {
+  if (viewport.panning) return;
   if (!state.session || !state.frame || !state.display) return;
   const point = canvasPoint(event, { clamp: dragStart !== null });
   if (!point) {
@@ -663,6 +755,8 @@ stageBody.addEventListener('pointerleave', () => {
 });
 
 stageBody.addEventListener('pointerdown', (event) => {
+  // Space-drag and middle-drag pan the view; they must never reach the phone.
+  if (viewport.panning || viewport.wantsPan(event)) return;
   if (!state.session || event.button !== 0) return;
   const point = canvasPoint(event);
   if (!point) return;
@@ -682,6 +776,7 @@ stageBody.addEventListener('pointerdown', (event) => {
 });
 
 stageBody.addEventListener('pointerup', async (event) => {
+  if (viewport.panning) return;
   if (!state.session || !dragStart || event.pointerId !== activePointer) return;
   const point = canvasPoint(event, { clamp: true });
   const moved = Math.hypot(point.x - dragStart.x, point.y - dragStart.y);
@@ -746,7 +841,8 @@ async function describePoint(point) {
   const described = geo.describe(point, element, frame, display);
   if (!described) return;
   state.lastPoint = described;
-  $('add-tap-step').disabled = !state.script;
+  state.lastNode = null;
+  syncProjectControls();
   try {
     // The server is authoritative for anything that gets recorded, and it is the
     // only side that can name the control under the cursor.
@@ -1118,7 +1214,13 @@ $('device-text').addEventListener('keydown', (event) => {
 // ---------------------------------------------------------------- projects
 
 async function loadProjects() {
-  const projects = await api.projects().catch(() => []);
+  let projects;
+  try {
+    projects = await api.projects();
+  } catch (error) {
+    toast(`项目读取失败：${error.message}`);
+    return;
+  }
   const select = $('project-select');
   select.textContent = '';
   select.disabled = projects.length === 0;
@@ -1142,15 +1244,33 @@ async function loadProjects() {
     renderSteps();
   }
   $('new-script').disabled = !state.project;
+  renderListenerStatus();
+  syncProjectControls();
   syncSelectionEditor();
   await loadStorage();
 }
 
+function syncProjectControls() {
+  const hasSteps = Boolean(state.script?.steps?.length);
+  $('run-script').disabled = !state.session || !hasSteps || Boolean(state.runId);
+  $('add-tap-step').disabled = !state.session || !state.script || !state.lastPoint;
+  const help = $('script-help');
+  if (!state.project) help.textContent = '先新建项目，再新建脚本。';
+  else if (!state.script) help.textContent = '新建脚本后，在画面上点一个位置来录制步骤。';
+  else if (!hasSteps) help.textContent = '在“操作设备”模式下点画面，再把当前点加为 tap 步骤。';
+  else help.textContent = `当前脚本有 ${state.script.steps.length} 个步骤，可运行或继续录制。`;
+}
+
 $('project-select').onchange = async () => {
-  const projects = await api.projects().catch(() => []);
+  const projects = await api.projects().catch((error) => {
+    toast(`项目读取失败：${error.message}`);
+    return [];
+  });
   state.project = projects.find((p) => p.id === $('project-select').value) || null;
+  state.script = null;
   renderScripts();
   setSessionControlsEnabled(Boolean(state.session));
+  renderListenerStatus();
   await loadStorage();
 };
 
@@ -1163,13 +1283,13 @@ $('new-project').onclick = async () => {
     await api.createProject({ id, name });
     await loadProjects();
     $('project-select').value = id;
-    $('project-select').onchange();
+    await $('project-select').onchange();
   } catch (error) {
     toast(`新建失败：${error.message}`);
   }
 };
 
-function renderScripts() {
+function renderScripts(selectedId = state.script?.id) {
   const select = $('script-select');
   select.textContent = '';
   const scripts = state.project?.scripts || [];
@@ -1180,20 +1300,20 @@ function renderScripts() {
     option.textContent = script.name;
     select.append(option);
   }
-  state.script = scripts.find((s) => s.id === select.value) || scripts[0] || null;
+  state.script = scripts.find((s) => s.id === selectedId) || scripts[0] || null;
   if (state.script) select.value = state.script.id;
   else select.innerHTML = '<option>未创建脚本</option>';
   renderSteps();
-  $('run-script').disabled = !state.session || !state.script;
-  $('add-tap-step').disabled = !state.session || !state.script || !state.lastPoint;
   $('export-script').disabled = !state.script;
   $('new-script').disabled = !state.project;
+  syncProjectControls();
   syncSelectionEditor();
 }
 
 $('script-select').onchange = () => {
   state.script = (state.project?.scripts || []).find((s) => s.id === $('script-select').value) || null;
   renderSteps();
+  syncProjectControls();
 };
 
 $('new-script').onclick = async () => {
@@ -1208,9 +1328,7 @@ $('new-script').onclick = async () => {
   try {
     const project = await api.saveScript(state.project.id, { id, name, steps: [] });
     state.project = project;
-    renderScripts();
-    $('script-select').value = id;
-    $('script-select').onchange();
+    renderScripts(id);
   } catch (error) {
     toast(`新建失败：${error.message}`);
   }
@@ -1289,6 +1407,7 @@ $('add-tap-step').onclick = async () => {
     state.project = await api.saveScript(state.project.id, script);
     state.script = state.project.scripts.find((s) => s.id === script.id);
     renderSteps();
+    syncProjectControls();
   } catch (error) {
     toast(`保存步骤失败：${error.message}`);
   }
@@ -1308,15 +1427,25 @@ $('run-script').onclick = async () => {
     });
     state.runId = run.run_id;
     setRunControls(true);
+    syncProjectControls();
     pollRun();
   } catch (error) {
     toast(`运行失败：${error.message}`);
   }
 };
 
-$('pause-run').onclick = () => state.runId && api.pauseRun(state.runId).catch(() => {});
-$('resume-run').onclick = () => state.runId && api.resumeRun(state.runId).catch(() => {});
-$('stop-run').onclick = () => state.runId && api.stopRun(state.runId).catch(() => {});
+async function controlRun(action, label) {
+  if (!state.runId) return;
+  try {
+    await action(state.runId);
+  } catch (error) {
+    toast(`${label}失败：${error.message}`);
+  }
+}
+
+$('pause-run').onclick = () => controlRun(api.pauseRun, '暂停');
+$('resume-run').onclick = () => controlRun(api.resumeRun, '继续');
+$('stop-run').onclick = () => controlRun(api.stopRun, '停止');
 
 function setRunControls(running) {
   $('pause-run').disabled = !running;
@@ -1335,7 +1464,7 @@ async function pollRun() {
       element.textContent = `已暂停于 ${run.paused_at} — 设备可手动操作`;
       element.className = 'pill pill--warn';
     } else if (run.done) {
-      const status = run.result?.status || 'done';
+      const status = run.result?.status || '执行异常';
       element.textContent = `运行结束：${status}`;
       element.className = `pill ${status === 'ok' ? 'pill--ok' : 'pill--bad'}`;
       setRunControls(false);
@@ -1343,15 +1472,18 @@ async function pollRun() {
         renderSteps(Object.fromEntries(run.result.steps.map((s) => [s.step_id, s])));
       }
       state.runId = null;
+      syncProjectControls();
       return;
     } else {
       element.textContent = '运行中';
       element.className = 'pill';
     }
     setTimeout(pollRun, 400);
-  } catch {
+  } catch (error) {
     setRunControls(false);
     state.runId = null;
+    syncProjectControls();
+    toast(`读取运行状态失败：${error.message}`);
   }
 }
 
@@ -1483,7 +1615,9 @@ function escapeHtml(value) {
 }
 
 function slug(value) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'item';
+  const ascii = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  if (ascii) return ascii;
+  return `item-${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 }
 
 // ---------------------------------------------------------------- wireless
@@ -1565,13 +1699,22 @@ $('wireless-tcpip').onclick = async () => {
   }
 };
 
+$('zoom-in').onclick = () => viewport.zoomIn();
+$('zoom-out').onclick = () => viewport.zoomOut();
+$('zoom-fit').onclick = () => viewport.fit();
+$('zoom-level').onclick = () => {
+  if (viewport.isFit) viewport.setDevicePercent(100);
+  else viewport.fit();
+};
+
 $('refresh-devices').onclick = loadDevices;
+$('probe-adb').onclick = () => probeAdb();
 $('connect').onclick = () => connect(false);
 $('release').onclick = release;
 $('mode-tap').onchange = () => { $('screen').style.cursor = 'crosshair'; };
 $('mode-select').onchange = () => { $('screen').style.cursor = 'cell'; };
 window.addEventListener('resize', () => {
-  syncOverlaySize();
+  refreshViewport();
   drawOverlay(null);
 });
 // No beacon on unload. sendBeacon can only POST, the release endpoint is a DELETE,
@@ -1579,8 +1722,17 @@ window.addEventListener('resize', () => {
 // page close. The lease TTL is the mechanism for "the browser went away": it expires
 // in 60s and the sweeper frees the device. An explicit close is the Release button.
 
+initLayout({
+  onResize: () => {
+    refreshViewport();
+    drawOverlay(null);
+  },
+});
+viewport.attach(stageBody);
+
 loadHealth();
 loadDevices();
 loadProjects();
 loadExporters();
-syncOverlaySize();
+refreshViewport();
+syncZoomControls();

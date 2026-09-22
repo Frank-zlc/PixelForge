@@ -4,6 +4,7 @@
 
 - 产品定位、功能范围与开发周期 → [PRODUCT.md](./PRODUCT.md)
 - 技术架构与设计决策 → [ARCHITECTURE.md](./ARCHITECTURE.md)
+- 文档中心与待评审的图形化图片实验本方案 → [docs/README.md](./docs/README.md)
 
 ---
 
@@ -26,7 +27,7 @@
 | **P8** | Listener 插件 · logcat · 统一时间线 | ✅ | ⬜ |
 | **P9** | 前端 IDE · API 装配 · 部署 | ✅ | ⬜ |
 
-**单元测试 374 项全通过，真机验收 0 项。** 这两个数字之间的差距就是本项目
+**后端测试 421 项全通过（2026-09-22），真机验收 0 项。** 这两个数字之间的差距就是本项目
 当前的真实风险：投屏、点击、取材、控件反查这些核心路径，一次都没在真手机上
 执行过。`vendor/scrcpy-server.jar` 和 uiautomator2 APK 也从未装入过，所以
 P1/P4 的设备侧代码是纯静态的。
@@ -328,10 +329,12 @@ PIXELFORGE_ADB_EXECUTABLE=/opt/android-sdk/platform-tools/adb
 # adb server 主机（容器化部署时用，默认 127.0.0.1）
 PIXELFORGE_ADB_SERVER_HOST=host.docker.internal
 
-# adb server 端口（默认 5038，不是 5037）
-# 5037 是机器级单例，任何别的工具（Android Studio、另一个 adb）都能把它重启掉，
-# 连带掀翻正在跑的会话。改成 5037 等于主动放弃这层隔离。
-PIXELFORGE_ADB_SERVER_PORT=5038
+# adb server 端口（默认 5037，即全机共用的那个）
+# 一台 USB 设备同一时刻只能被一个 adb server 认领。用私有端口（如 5038）意味着
+# 只要别的工具（你的终端、Android Studio、scrcpy）先起了 5037 的 server，这边就
+# 永远看不到设备。只有在确定机器上没有别的 adb 时（容器、CI）才值得隔离。
+# 设备列表为空时，界面会自动调 GET /api/adb/probe 告诉你设备在哪个端口手里。
+PIXELFORGE_ADB_SERVER_PORT=5037
 
 # adb 命令超时（秒，默认 15）
 PIXELFORGE_ADB_TIMEOUT_S=30

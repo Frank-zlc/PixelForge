@@ -1,0 +1,12 @@
+.asset-main { display:grid; grid-template-columns:minmax(230px, 320px) minmax(240px, 390px) minmax(0, 1fr); }
+.asset-main .source-actions { margin-top:16px; }
+.asset-list { display:grid; align-content:start; gap:7px; max-height:70vh; overflow:auto; }
+.asset-item { display:grid; grid-template-columns:48px 1fr; gap:3px 9px; width:100%; text-align:left; align-items:center; }
+.asset-item img { width:48px; height:48px; object-fit:cover; grid-row:span 2; border-radius:5px; background:#0b111a; }
+.asset-item small { color:#9aaabb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.asset-item[data-active=true] { border-color:#64c9ef; background:#193341; }
+.preview-panel img { display:block; max-width:100%; max-height:65vh; margin:16px auto; background:#0b111a; }
+.preview-panel img[hidden] { display:none; }
+.preview-panel a { display:inline-block; margin:4px 10px 0 0; }
+@media(max-width:1050px) { .asset-main { grid-template-columns:1fr 1fr; } .preview-panel { grid-column:1 / -1; } }
+@media(max-width:650px) { .asset-main { grid-template-columns:1fr; } .preview-panel { grid-column:auto; } }

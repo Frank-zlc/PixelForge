@@ -54,6 +54,7 @@ async function requestImage(method, path, body) {
 
 export const api = {
   health: () => request('GET', '/api/health'),
+  adbProbe: () => request('GET', '/api/adb/probe'),
   devices: () => request('GET', '/api/devices'),
   storage: (projectId) =>
     request('GET', `/api/storage${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),

@@ -55,6 +55,8 @@ async def list_projects(store: StoreDep) -> list[Project]:
 
 @router.post("/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
 async def create_project(project: Project, store: StoreDep) -> Project:
+    if store.project_file(project.id).is_file():
+        raise HTTPException(status.HTTP_409_CONFLICT, f"project {project.id!r} already exists")
     return store.save(project)
 
 

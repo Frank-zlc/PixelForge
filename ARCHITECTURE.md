@@ -332,12 +332,18 @@ class Dev:
 1. **adb 调用一律 `asyncio.create_subprocess_exec`**，绝不在 async 函数里 `subprocess.run`。一次阻塞的截图会卡住所有设备的视频流。
 2. **CV / OCR 丢进 `ProcessPoolExecutor`**。`matchTemplate` 和 pytesseract 单次几百毫秒纯 CPU，跑在事件循环里同上。
 3. **不要 `uvicorn --workers N`**。scrcpy 连接、租约都是进程内状态，多 worker 会让请求随机落到没有该设备会话的进程上。要扩展就拆独立的 device-manager 进程 + Redis 共享状态。
-4. **adb 二进制 vendor 进仓库，用独立 server 端口。** 默认 `127.0.0.1:5037` 是全局单例 —— 同事开一次 Android Studio，或任何人 `adb kill-server`，你所有会话瞬间全断。
+4. **adb 二进制 vendor 进仓库；但 server 端口默认用共用的 5037。** ~~用独立端口 5038~~ —— 这条 v3 写反了，实测推翻，见下。
+
+   独立端口的出发点没错：`127.0.0.1:5037` 是全局单例，同事开一次 Android Studio 或任何人 `adb kill-server`，会话就断。但它漏算了一条更硬的约束：**一台 USB 设备同一时刻只能被一个 adb server 认领**，谁先打开 USB 句柄归谁。于是只要机器上任何别的东西起过 5037 的 server（一次 `adb devices`、Android Studio、scrcpy），跑在 5038 上的 PixelForge 就只能看到空列表，而且从界面上完全看不出原因。
+
+   两种故障并不对称：**被别人 kill 掉的 server 能自愈**（tracker 会重连并 `start-server`），**输掉的 USB 认领不能**，必须有人去把那个 server 杀掉。所以默认共用 5037，把能自愈的那种麻烦留给自己。
 
 ```bash
-vendor/platform-tools/adb -P 5038 start-server
-export ADB_SERVER_SOCKET=tcp:127.0.0.1:5038
+# 默认即共用 5037，无需设置。只有在确定机器上没有别的 adb 时（容器、CI）才隔离：
+PIXELFORGE_ADB_SERVER_PORT=5038 pixelforge serve
 ```
+
+   `GET /api/adb/probe` 会探测各候选端口上的 server 及其可见设备，界面在设备列表为空时自动调用它，直接说明设备在谁手里。探测不会启动任何 server。
 
 5. **adb 调用只接受 argv，不接受 shell 字符串。** serial 走正则白名单。这是防止路径穿越和命令注入的最小成本做法。
 

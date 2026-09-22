@@ -42,6 +42,10 @@ pixelforge serve
 # 1) 宿主机起 adb server，监听容器能到达的地址
 adb -a -P 5038 nodaemon server
 
+# 注意：应用默认用 5037，这里宿主机开的是 5038，所以容器侧要显式指定
+#   PIXELFORGE_ADB_SERVER_PORT=5038
+# （docker-compose.yml 里设置；宿主机上也不要再有别的 adb server 占着这台设备）
+
 # 2) 另开一个终端
 export PLATFORM_TOOLS_VERSION=$(adb version | sed -n 's/.*Version \([0-9.]*\).*/\1/p' | head -1)
 docker compose up --build

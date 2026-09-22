@@ -25,18 +25,53 @@ body {
   overflow: hidden;
 }
 
-/* Four panes: devices, canvas, inspector, and a timeline across the bottom.
-   The canvas column is the only flexible one -- the side panels hold text that
-   should not reflow while the video resizes. */
+/* Four panes: devices, canvas, inspector, and a timeline across the bottom,
+   separated by draggable gutters. The canvas column is the only flexible one --
+   the side panels hold text that should not reflow while the video resizes.
+   The three sizes live in custom properties so layout.js can move them without
+   knowing anything about the grid. */
 .shell {
+  --col-left: 260px;
+  --col-right: 340px;
+  --row-timeline: 210px;
+  --gutter: 6px;
   display: grid;
-  grid-template-columns: 260px minmax(320px, 1fr) 340px;
-  grid-template-rows: 1fr 210px;
-  grid-template-areas: "devices stage inspector" "timeline timeline timeline";
+  grid-template-columns: var(--col-left) var(--gutter) minmax(280px, 1fr) var(--gutter) var(--col-right);
+  grid-template-rows: minmax(0, 1fr) var(--gutter) var(--row-timeline);
+  grid-template-areas:
+    "devices  gl stage gr inspector"
+    "gb       gb gb    gb gb"
+    "timeline timeline timeline timeline timeline";
   height: 100vh;
-  gap: 1px;
-  background: var(--line);
+  background: var(--bg);
 }
+
+/* A gutter is 6px of hit area around a 1px hairline: easy to grab, invisible
+   until you go near it. */
+.gutter { position: relative; background: var(--bg); touch-action: none; }
+.gutter::after {
+  content: ""; position: absolute; background: var(--line);
+  transition: background .12s ease, width .12s ease, height .12s ease;
+}
+.gutter--x { cursor: col-resize; }
+.gutter--x::after { top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); }
+.gutter--y { cursor: row-resize; }
+.gutter--y::after { left: 0; right: 0; top: 50%; height: 1px; transform: translateY(-50%); }
+.gutter:hover::after, .gutter.is-active::after { background: var(--accent); }
+.gutter--x:hover::after, .gutter--x.is-active::after { width: 3px; }
+.gutter--y:hover::after, .gutter--y.is-active::after { height: 3px; }
+.gutter[data-track="left"] { grid-area: gl; }
+.gutter[data-track="right"] { grid-area: gr; }
+.gutter[data-track="timeline"] { grid-area: gb; }
+
+/* While dragging, the cursor must not flicker as it crosses other elements. */
+body.is-resizing-x, body.is-resizing-x * { cursor: col-resize !important; user-select: none !important; }
+body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-select: none !important; }
+
+/* Collapsed: the head stays, the log and its gutter go. */
+.shell[data-timeline="collapsed"] { --row-timeline: auto; }
+.shell[data-timeline="collapsed"] .timeline-body { display: none; }
+.shell[data-timeline="collapsed"] .gutter[data-track="timeline"] { visibility: hidden; }
 
 .pane { background: var(--panel); overflow: auto; padding: 12px; min-width: 0; }
 .pane--devices { grid-area: devices; }
@@ -45,6 +80,8 @@ body {
 .pane--timeline { grid-area: timeline; padding: 0; display: flex; flex-direction: column; }
 
 h1 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.tool-page-link { display: block; margin: 0 0 12px; color: var(--accent); font-size: 12px; text-decoration: none; }
+.tool-page-link:hover { text-decoration: underline; }
 h2 { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; }
 h2:first-child { margin-top: 0; }
 
@@ -90,10 +127,19 @@ textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 }
 .stage-body {
   flex: 1 1 auto; position: relative; min-height: 0; background: #07080b;
-  touch-action: none; user-select: none;
+  touch-action: none; user-select: none; overflow: hidden;
 }
-.stage-wrap { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
-#screen { max-width: 100%; max-height: 100%; display: block; image-rendering: pixelated; cursor: crosshair; }
+/* The frame is placed by transform alone (see viewport.js): absolute at the
+   wrap's origin, moved and scaled from that corner. Nothing here may re-centre
+   it or cap its size, or the transform would no longer describe where it is. */
+.stage-wrap { position: absolute; inset: 0; overflow: hidden; }
+#screen {
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform;
+  display: block; image-rendering: pixelated; cursor: crosshair;
+}
+/* !important because the interaction-mode handlers set an inline cursor. */
+.stage-body.pan-ready, .stage-body.pan-ready #screen { cursor: grab !important; }
+.stage-body.is-panning, .stage-body.is-panning #screen { cursor: grabbing !important; }
 #overlay { position: absolute; inset: 0; pointer-events: none; }
 .readout {
   position: absolute; left: 10px; bottom: 10px; font-family: var(--mono); font-size: 11px;
@@ -151,7 +197,32 @@ textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 .event__msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .muted { color: var(--muted); }
 .note { color: var(--warn); font-size: 12px; margin: 6px 0; }
+
+/* adb server probe */
+.probe { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+.probe__head { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+.probe__server { margin-top: 7px; font-family: var(--mono); font-size: 11.5px; }
+.probe__server[data-active="true"] { color: var(--accent); }
+.probe__devices { color: var(--muted); padding-left: 10px; }
+.probe__verdict { margin-top: 9px; font-size: 12px; line-height: 1.55; color: var(--warn); }
+.probe__verdict code {
+  font-family: var(--mono); font-size: 11px; background: #0f1116;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  display: inline-block; margin-top: 4px; color: var(--text);
+}
+.probe__verdict--ok { color: var(--ok); }
 .interaction-mode { cursor: pointer; }
+
+/* zoom controls */
+.zoom-group { display: inline-flex; align-items: center; gap: 4px; }
+.zoom-group button { padding: 4px 9px; line-height: 1.2; }
+.zoom-level { min-width: 62px; font-family: var(--mono); font-size: 11.5px; }
+button.is-on { border-color: var(--accent); color: var(--accent); }
+.chevron {
+  padding: 0 5px; line-height: 1.2; background: none; border: none;
+  color: var(--muted); font-size: 11px;
+}
+.chevron:hover { color: var(--text); }
 .selection-help { font-size: 12px; margin: 0 0 7px; }
 .selection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .selection-grid label { color: var(--muted); font-size: 11px; }

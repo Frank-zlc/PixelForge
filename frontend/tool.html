@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工具详情 · PixelForge</title>
+  <link rel="stylesheet" href="tools.css">
+  <link rel="stylesheet" href="tool.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><nav><a href="./">设备工作台</a> · <a href="tools.html">功能目录</a> · <a href="assets.html">素材库</a></nav><h1 id="tool-name">工具详情</h1><p id="tool-summary">正在读取…</p></div>
+    <span id="tool-state" class="badge"></span>
+  </header>
+  <main class="detail-main">
+    <section class="panel">
+      <h2>功能资料</h2>
+      <dl id="tool-info" class="info-grid"></dl>
+      <h2>参数</h2>
+      <div id="tool-parameters"></div>
+      <h2>输入与输出</h2>
+      <div id="tool-ports"></div>
+    </section>
+    <section class="panel">
+      <h2>处理效果</h2>
+      <p id="example-state" class="hint"></p>
+      <div class="example-grid">
+        <figure><img id="example-source" src="/api/image-tools/demo-source" alt="示例原图"><figcaption>示例原图</figcaption></figure>
+        <figure><img id="effect-image" alt="该工具处理后的示例" hidden><figcaption>处理结果</figcaption></figure>
+      </div>
+      <div id="example-list"></div>
+      <a id="try-tool" class="button" href="tools.html">在图片工作台试用</a>
+    </section>
+  </main>
+  <script type="module" src="tool.js"></script>
+</body>
+</html>

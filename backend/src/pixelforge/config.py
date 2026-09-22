@@ -64,12 +64,15 @@ class Settings(BaseSettings):
         ),
     )
     adb_server_port: int = Field(
-        default=5038,
+        default=5037,
         ge=1,
         le=65535,
         description=(
-            "Private adb server port. Deliberately not 5037 -- that one is a "
-            "machine-wide singleton any other tool can restart."
+            "adb server port. Defaults to the machine-wide 5037 so PixelForge "
+            "shares the server that already owns the USB device -- only one "
+            "adb server can claim a phone, and a private port loses that race "
+            "against any other tool. Set a private port (5038) only where "
+            "nothing else runs adb."
         ),
     )
     adb_timeout_s: float = Field(default=15.0, gt=0, le=300)
