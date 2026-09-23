@@ -151,3 +151,42 @@ def test_match_verify_color_mode_uses_the_color_param() -> None:
         params={"template": encode_data_url(template), "mode": "color", "color": "blue"},
     )
     assert yellow.metrics["similarity"] > blue.metrics["similarity"]
+
+
+def test_ocr_finds_demo_text_and_reports_word_boxes() -> None:
+    image = demo_image()
+    result = run_operator("ocr", image, params={"language": "eng"})
+    assert result.metrics["word_count"] >= 1
+    assert any("PIXEL" in region["text"].upper() or "FORGE" in region["text"].upper() for region in result.regions)
+    assert all("confidence" in region and "text" in region for region in result.regions)
+    assert not np.array_equal(result.images["image"], image)  # boxes were drawn
+
+
+def test_ocr_min_confidence_filters_out_everything() -> None:
+    image = demo_image()
+    result = run_operator("ocr", image, params={"language": "eng", "min_confidence": 100})
+    assert result.metrics["word_count"] == 0
+    assert result.regions == ()
+    assert np.array_equal(result.images["image"], image)  # nothing drawn
+
+
+def test_ocr_reports_similarity_against_target_words() -> None:
+    image = demo_image()
+    close = run_operator("ocr", image, params={"language": "eng", "target_words": "PIXEL FORGE"})
+    far = run_operator("ocr", image, params={"language": "eng", "target_words": "zzzzz"})
+    assert "text_similarity" in close.metrics
+    assert close.metrics["text_similarity"] > far.metrics["text_similarity"]
+
+
+def test_ocr_raises_a_clean_error_when_tesseract_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pixelforge.image_lab.operators as operators_module
+
+    class _Unavailable:
+        available = False
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(operators_module, "TesseractOcr", _Unavailable)
+    with pytest.raises(ValueError, match="Tesseract"):
+        run_operator("ocr", demo_image())

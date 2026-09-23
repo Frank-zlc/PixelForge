@@ -10,10 +10,12 @@ import numpy as np
 
 from pixelforge.geometry.mapper import Rect
 from pixelforge.vision.matching import match_template
+from pixelforge.vision.ocr import OcrError, TesseractOcr, text_similarity
 from pixelforge.vision.tool_catalog import (
     _color_mask,
     decode_data_url,
     demo_image,
+    draw_boxes,
     draw_marker,
     encode_data_url,
     process_image,
@@ -21,7 +23,7 @@ from pixelforge.vision.tool_catalog import (
 )
 
 ParamValue = str | int | float | bool
-ParamKind = Literal["choice", "integer", "number", "boolean", "image"]
+ParamKind = Literal["choice", "integer", "number", "boolean", "image", "text"]
 Handler = Callable[[np.ndarray, Rect | None, dict[str, ParamValue]], "OpResult"]
 
 # The one type every operator's single "image" input accepts today. A MASK8
@@ -59,6 +61,10 @@ class ParamSpec:
         if self.kind == "image":
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{self.name} must be a base64-encoded image")
+            return value
+        if self.kind == "text":
+            if not isinstance(value, str):
+                raise ValueError(f"{self.name} must be text")
             return value
         if self.kind == "boolean":
             if isinstance(value, bool):
@@ -333,6 +339,56 @@ def match_verify(image: np.ndarray, roi: Rect | None, params: dict[str, ParamVal
         text="相似" if passed else "不相似",
         notes=(f"similarity={ratio:.3f} threshold={params['similarity']} mode={mode}",),
     )
+
+
+OCR_LANGUAGES = ("eng", "chi_sim", "chi_sim+eng")
+OCR_PARAMS = (
+    ParamSpec("language", "识别语言", "choice", "eng", options=OCR_LANGUAGES),
+    ParamSpec("psm", "页面分割模式 (PSM)", "integer", 11, 0, 13),
+    ParamSpec("min_confidence", "最低置信度", "number", 60, 0, 100),
+    ParamSpec("target_words", "目标文字 (可选, 用于相似度校验)", "text", ""),
+)
+
+
+@operator(
+    id="ocr", category="文字识别", name="OCR 文字定位",
+    description=(
+        "调用 Tesseract 识别选区(或整图)文字, 返回逐词候选框、置信度; "
+        "填写目标文字可额外给出与识别结果的相似度。默认语言包 eng 已随环境自带, "
+        "识别中文需要在系统上另外安装 chi_sim 语言包。"
+    ),
+    source="PixelForge 设备脚本复用 (TesseractOcr)",
+    params=OCR_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def ocr(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    engine = TesseractOcr(language=str(params["language"]))
+    if not engine.available:
+        raise ValueError("未找到 Tesseract 可执行文件, 无法运行 OCR (设置 TESSERACT_CMD 或安装 tesseract)")
+    try:
+        result = engine.recognize_sync(image, crop=roi, psm=int(params["psm"]))
+    except OcrError as exc:
+        # A missing language pack, a segfault on odd input, a timeout -- all of
+        # these should downgrade this operator to "pending_adapter" rather than
+        # crash the app at startup, where availability() runs this same demo.
+        raise ValueError(str(exc)) from exc
+    min_confidence = float(params["min_confidence"])
+    kept = tuple(word for word in result.words if word.confidence >= min_confidence)
+    preview = draw_boxes(image, [word.box for word in kept]) if kept else image
+    regions = tuple(
+        {
+            "x": word.box.x, "y": word.box.y, "width": word.box.width, "height": word.box.height,
+            "text": word.text, "confidence": word.confidence,
+        }
+        for word in kept
+    )
+    points = tuple({"x": word.center.x, "y": word.center.y} for word in kept)
+    metrics: dict[str, float] = {"word_count": float(len(kept))}
+    if result.mean_confidence is not None:
+        metrics["mean_confidence"] = result.mean_confidence
+    target = str(params["target_words"])
+    if target:
+        metrics["text_similarity"] = text_similarity(target, result.text)
+    return OpResult(images={"image": preview}, regions=regions, points=points, metrics=metrics, text=result.text)
 
 
 def _selected(image: np.ndarray, roi: Rect | None) -> np.ndarray:

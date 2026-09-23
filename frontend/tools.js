@@ -134,7 +134,7 @@ function renderParameters() {
       input.value = String(param.default);
     } else {
       input = document.createElement('input');
-      input.type = param.kind === 'boolean' ? 'checkbox' : 'number';
+      input.type = param.kind === 'boolean' ? 'checkbox' : param.kind === 'text' ? 'text' : 'number';
       if (param.minimum !== null) input.min = String(param.minimum);
       if (param.maximum !== null) input.max = String(param.maximum);
       if (param.kind === 'boolean') input.checked = Boolean(param.default);

@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from pixelforge.image_lab.operators import OPERATORS, OperatorSpec, manifest
+from pixelforge.vision import ocr as vision_ocr
 from pixelforge.vision import tool_catalog
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -54,6 +55,10 @@ def _source_hash(spec: OperatorSpec) -> str:
         source += inspect.getsource(tool_catalog.draw_marker).encode()
     if spec.id == "match_verify":
         source += inspect.getsource(tool_catalog.similarity_ratio).encode()
+    if spec.id == "ocr":
+        source += inspect.getsource(tool_catalog.draw_boxes).encode()
+        source += inspect.getsource(vision_ocr.TesseractOcr.recognize_sync).encode()
+        source += inspect.getsource(vision_ocr.text_similarity).encode()
     return hashlib.sha256(source).hexdigest()
 
 
@@ -324,7 +329,7 @@ class ImageLabStore:
                 tool_id, category, name, function_name, description, _, source, params = row
                 state = (
                     "pending_adapter"
-                    if tool_id in {"template_match", "ocr", "screen_diff"}
+                    if tool_id in {"screen_diff"}
                     else "planned"
                 )
                 if tool_id == "batch_process":

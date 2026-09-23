@@ -22,16 +22,6 @@ if TYPE_CHECKING:
 # decorated code registry in image_lab/operators.py.
 PENDING_TOOLS: tuple[tuple[str, str, str, str, str, str, str, dict[str, str | int]], ...] = (
     (
-        "ocr",
-        "文字识别",
-        "OCR 文字定位",
-        "TesseractOcr.recognize",
-        "设备脚本中已有文字框与置信度; 图片工作台尚未接入结果标注。",
-        "device_only",
-        "PixelForge",
-        {},
-    ),
-    (
         "screen_diff",
         "画面分析",
         "画面变化检测",
@@ -146,6 +136,17 @@ def draw_marker(image: np.ndarray, box: Rect, color: tuple[int, int, int] = (64,
     """Copy of ``image`` with a rectangle drawn around ``box``. Never mutates the input."""
     marked = image.copy()
     cv2.rectangle(marked, (box.x, box.y), (box.right, box.bottom), color, 2)
+    return marked
+
+
+def draw_boxes(
+    image: np.ndarray, boxes: list, color: tuple[int, int, int] = (64, 200, 120)
+) -> np.ndarray:
+    """Copy of ``image`` with a rectangle drawn around each of ``boxes`` (any object
+    with ``.x``/``.y``/``.right``/``.bottom``, e.g. ``Rect``). Never mutates the input."""
+    marked = image.copy()
+    for box in boxes:
+        cv2.rectangle(marked, (box.x, box.y), (box.right, box.bottom), color, 1)
     return marked
 
 

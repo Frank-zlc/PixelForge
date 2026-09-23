@@ -26,6 +26,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,6 +44,7 @@ __all__ = [
     "TesseractOcr",
     "find_tesseract",
     "parse_tsv",
+    "text_similarity",
 ]
 
 # Tesseract's TSV has a `level` column; 5 is a word. The others are page, block,
@@ -174,6 +177,23 @@ def parse_tsv(tsv: str, *, offset: tuple[int, int] = (0, 0)) -> list[RecognizedW
     return words
 
 
+def text_similarity(target: str, recognized: str) -> float:
+    """MHXY 移植 (``ocr_data_similarity``): 目标文字与识别文字的字符交集比例.
+
+    Character-multiset intersection over the target's own character count, so
+    a recognised string that contains every target character (plus noise) still
+    scores 1.0 -- this is "did OCR find what we were looking for", not an edit
+    distance. Empty target or no recognised text both score 0.0.
+    """
+    if not target or not recognized:
+        return 0.0
+    expected = Counter(target)
+    found = Counter(recognized)
+    intersection = sum((expected & found).values())
+    total = sum(expected.values())
+    return intersection / total if total else 0.0
+
+
 class TesseractOcr:
     """Runs Tesseract out of process.
 
@@ -262,6 +282,68 @@ class TesseractOcr:
             raise OcrError(stderr.decode("utf-8", errors="replace").strip() or "OCR failed")
 
         words = tuple(parse_tsv(stdout.decode("utf-8", errors="replace"), offset=offset))
+        mean = (
+            sum(word.confidence for word in words) / len(words) if words else None
+        )
+        return OcrResult(
+            text=" ".join(word.text for word in words),
+            words=words,
+            mean_confidence=mean,
+            language=language,
+        )
+
+    def recognize_sync(
+        self,
+        image: "np.ndarray",
+        *,
+        crop: Rect | None = None,
+        language: str | None = None,
+        psm: int = 11,
+    ) -> OcrResult:
+        """Blocking twin of :meth:`recognize`, for callers that already run off the
+
+        event loop (a threadpool worker) or run before one exists (app startup's
+        synchronous operator self-test). ``asyncio.run()`` would fail in that second
+        case -- "cannot be called from a running event loop" -- so this shells out
+        with ``subprocess.run`` instead of ``asyncio.create_subprocess_exec``. Parsing
+        and error handling are identical to the async path; only the process call
+        differs.
+        """
+        import cv2
+
+        command = self.require()
+        language = language or self.language
+
+        offset = (0, 0)
+        if crop is not None:
+            box = crop.clamped_to(Size(image.shape[1], image.shape[0]))
+            image = image[box.y : box.bottom, box.x : box.right]
+            offset = (box.x, box.y)
+
+        ok, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        if not ok:
+            raise OcrError("could not encode the image for OCR")
+
+        argv = [command, "stdin", "stdout", "-l", language, "--psm", str(psm), "tsv"]
+        env = dict(os.environ)
+        if self._tessdata is not None:
+            env["TESSDATA_PREFIX"] = str(self._tessdata)
+
+        try:
+            completed = subprocess.run(
+                argv,
+                input=encoded.tobytes(),
+                capture_output=True,
+                env=env,
+                timeout=self._timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise OcrError(f"Tesseract timed out after {self._timeout}s") from exc
+        if completed.returncode:
+            raise OcrError(completed.stderr.decode("utf-8", errors="replace").strip() or "OCR failed")
+
+        words = tuple(parse_tsv(completed.stdout.decode("utf-8", errors="replace"), offset=offset))
         mean = (
             sum(word.confidence for word in words) / len(words) if words else None
         )

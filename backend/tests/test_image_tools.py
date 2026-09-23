@@ -42,6 +42,7 @@ def test_catalog_demo_and_local_crop(tmp_path: Path) -> None:
             "text_enhance",
             "template_match",
             "match_verify",
+            "ocr",
         }
         assert all(tool["effect_image"] for tool in tools if tool["availability"] == "available")
         assert client.get("/api/image-tools/color_mask/demo").headers["content-type"] == "image/png"
@@ -57,7 +58,8 @@ def test_catalog_demo_and_local_crop(tmp_path: Path) -> None:
         assert np.count_nonzero(_pixels(mask.content)[10:25, 20:45]) > 0
         assert np.count_nonzero(_pixels(mask.content)[:10]) == 0
 
-        assert client.post("/api/image-tools/ocr/run", content=_png(image)).status_code == 409
+        # screen_diff is still pending_adapter (unlike ocr, now registered and ready)
+        assert client.post("/api/image-tools/screen_diff/run", content=_png(image)).status_code == 409
         assert client.post("/api/image-tools/crop/run", content=_png(image)).status_code == 422
         assert (
             client.post(
