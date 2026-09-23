@@ -177,3 +177,14 @@ def asset_content(asset_id: str, request: Request, variant: str = "preview") -> 
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown image asset")
     media_type = "application/octet-stream" if variant == "original" else "image/png"
     return FileResponse(path, media_type=media_type)
+
+
+@router.get("/outputs/{run_id}/{step_run_id}/{port}.png")
+def run_output(run_id: str, step_run_id: str, port: str, request: Request) -> FileResponse:
+    from pixelforge.image_lab.runs import NotebookRunner
+
+    runner = NotebookRunner(_store(request))
+    path = runner.output_path(run_id, step_run_id, port)
+    if path is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run output")
+    return FileResponse(path, media_type="image/png")

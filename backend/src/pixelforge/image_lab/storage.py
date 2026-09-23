@@ -202,8 +202,7 @@ class ImageLabStore:
                         started_at TEXT,
                         finished_at TEXT,
                         error_json TEXT,
-                        idempotency_key TEXT,
-                        UNIQUE(notebook_id, idempotency_key)
+                        idempotency_key TEXT
                     );
                     CREATE TABLE IF NOT EXISTS step_runs (
                         id TEXT PRIMARY KEY,

@@ -15,7 +15,7 @@
 | 文档 | 状态与用途 |
 | --- | --- |
 | [设计文档规范与索引](design/README.md) | 固定目录、命名、评审和持续维护要求 |
-| [PF-DES-001：图形化图片实验本](design/001-2026-09-22-visual-image-notebook/README.md) | **N1 已完成，N2 待开发**；整改、页面、数据库、接口、MHXY 复用、分期验收 |
+| [PF-DES-001：图形化图片实验本](design/001-2026-09-22-visual-image-notebook/README.md) | **N1 已完成，N2 草稿 API 开发中**；整改、页面、数据库、接口、MHXY 复用、分期验收 |
 | [设计模板](design/TEMPLATE.md) | 后续方案的起点 |
 | [原产品规划](../PRODUCT.md) | 以 Android 自动化为主的历史范围与阶段 |
 | [原架构设计](../ARCHITECTURE.md) | 设备体系及早期架构设想；与当前实现的差异见 PF-DES-001 |

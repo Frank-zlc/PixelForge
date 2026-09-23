@@ -36,6 +36,7 @@ from pixelforge.api import control as control_api
 from pixelforge.api import devices as devices_api
 from pixelforge.api import image_lab as image_lab_api
 from pixelforge.api import image_tools as image_tools_api
+from pixelforge.api import notebooks as notebooks_api
 from pixelforge.api import projects as projects_api
 from pixelforge.api import runs as runs_api
 from pixelforge.config import Settings, get_settings
@@ -107,6 +108,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         app.state.listeners = listeners
         app.state.image_tools = ImageToolCatalog(config.data_dir / "image_tools.sqlite3")
         app.state.image_lab = app.state.image_tools.store
+        from pixelforge.image_lab.runs import NotebookRunner
+
+        app.state.notebook_runner = NotebookRunner(app.state.image_lab)
         app.state.adb_available = False
 
         try:
@@ -167,6 +171,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     for router in (
         devices_api.router,
         image_lab_api.router,
+        notebooks_api.router,
         image_tools_api.router,
         capture_api.router,
         control_api.router,

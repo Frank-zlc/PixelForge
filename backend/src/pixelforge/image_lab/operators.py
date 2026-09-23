@@ -15,6 +15,13 @@ ParamValue = str | int | float | bool
 ParamKind = Literal["choice", "integer", "number", "boolean"]
 Handler = Callable[[np.ndarray, Rect | None, dict[str, ParamValue]], "OpResult"]
 
+# The one type every operator's single "image" input accepts today. A MASK8
+# output (color_mask's "mask" port, say) is a single channel of 0/255 -- feeding
+# it to a step that expects a full image is a type error, not a style choice.
+# Named once here so the notebook-graph validator checks against this exact
+# value instead of keeping its own copy that can drift out of sync.
+IMAGE_INPUT_TYPE = "IMAGE_RGB8"
+
 
 @dataclass(frozen=True, slots=True)
 class ParamSpec:
@@ -307,7 +314,7 @@ def manifest(spec: OperatorSpec) -> dict[str, object]:
         "version": spec.version,
         "implementation_key": spec.function_name,
         "params_schema": [param.as_dict() for param in spec.params],
-        "inputs_schema": {"image": "IMAGE_RGB8", "roi_required": spec.needs_roi},
+        "inputs_schema": {"image": IMAGE_INPUT_TYPE, "roi_required": spec.needs_roi},
         "outputs_schema": dict(spec.outputs),
         "acceptance_ref": spec.acceptance_ref,
     }

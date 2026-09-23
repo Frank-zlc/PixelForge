@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>实验本 · PixelForge</title>
+  <link rel="stylesheet" href="tools.css">
+  <link rel="stylesheet" href="notebooks.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <nav><a href="./">设备工作台</a> · <a href="tools.html">功能目录</a> · <a href="assets.html">图片素材库</a></nav>
+      <h1>实验本</h1>
+      <p>保存、编辑和运行多步骤图像处理流程。</p>
+    </div>
+    <div id="notebook-count" class="counts">正在读取…</div>
+  </header>
+  <main class="notebooks-main">
+    <section class="panel">
+      <div class="section-head"><h2>新建实验本</h2></div>
+      <div class="new-notebook">
+        <label>标题<input id="new-title" type="text" placeholder="例如：发票文字识别" maxlength="120"></label>
+        <label>说明<textarea id="new-description" rows="3" placeholder="实验目标…" maxlength="2000"></textarea></label>
+        <button id="create-notebook" type="button" class="primary">创建</button>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="section-head"><h2>最近实验本</h2><button id="refresh-notebooks" type="button">刷新</button></div>
+      <div id="notebook-list" class="notebook-list"></div>
+    </section>
+  </main>
+  <script type="module" src="notebooks.js"></script>
+</body>
+</html>

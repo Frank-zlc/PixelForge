@@ -1,0 +1,9 @@
+.notebooks-main { grid-template-columns: minmax(290px, 420px) minmax(0, 1fr); }
+.new-notebook { display: grid; gap: 12px; }
+.new-notebook label { display: grid; gap: 5px; color: #a9b9c9; font-size: 13px; }
+.new-notebook input, .new-notebook textarea { background: #101722; border: 1px solid #344357; color: #e7edf4; border-radius: 7px; padding: 9px; }
+.notebook-list { display: grid; gap: 10px; align-content: start; }
+.notebook-item { display: grid; gap: 6px; text-align: left; }
+.notebook-item .meta { color: #9aaabb; font-size: 12px; }
+.notebook-item .status { color: #82d9b2; font-size: 12px; }
+@media (max-width: 900px) { .notebooks-main { grid-template-columns: 1fr; } }

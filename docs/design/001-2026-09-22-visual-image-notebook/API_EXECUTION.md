@@ -34,6 +34,8 @@ updated: 2026-09-22
 
 N1 已实现 `/tools`、`/tools/{id}`、`/tools/{id}/examples`、`POST /tools/{id}/run`、`POST /imports`、`GET /assets`、`GET /assets/{id}` 和内容读取。快速预览接口返回 JSON，图片/掩码端口暂用 base64 data URL 传回浏览器，限制单输出 PNG 40 MB；它不生成 notebook run。N2 的多步运行改为托管产物引用。当前目录页使用旧单步 PNG 入口以保持兼容，并从新目录接口读取 schema 和可用状态。
 
+N2 草稿 API 已先行实现 `POST/GET /notebooks`、`GET/PUT /notebooks/{id}`：保存时校验步骤顺序、具名端口类型、素材存在性、参数和 revision。它只保存草稿；`/runs` 路由和实验本页面尚未实现。
+
 设备快照入口在 N4 接入：用户从设备页点击“保存截图并在实验本打开”，设备端先产生无损 PNG，复制到素材库后返回 asset ID。实验运行使用冻结图片，不能隐式订阅实时流。N4 批量 API 复用已发布实验快照，另建批次任务与逐文件运行记录；在 N4 细化后补充字段，不挤入本期单图 run 表。
 
 ### 错误格式

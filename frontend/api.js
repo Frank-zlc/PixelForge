@@ -129,6 +129,18 @@ export const api = {
   pauseRun: (runId) => request('POST', `/api/runs/${runId}/pause`),
   resumeRun: (runId) => request('POST', `/api/runs/${runId}/resume`),
   stopRun: (runId) => request('POST', `/api/runs/${runId}/stop`),
+
+  notebooks: () => request('GET', '/api/image-lab/notebooks'),
+  createNotebook: (body) => request('POST', '/api/image-lab/notebooks', body),
+  notebook: (id) => request('GET', `/api/image-lab/notebooks/${encodeURIComponent(id)}`),
+  saveNotebook: (id, body) => request('PUT', `/api/image-lab/notebooks/${encodeURIComponent(id)}`, body),
+  notebookRuns: (id) => request('GET', `/api/image-lab/notebooks/${encodeURIComponent(id)}/runs`),
+  startNotebookRun: (id) => request('POST', `/api/image-lab/notebooks/${encodeURIComponent(id)}/runs`, {}),
+  notebookRun: (id, runId) => request('GET', `/api/image-lab/notebooks/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`),
+  cancelNotebookRun: (id, runId) => request('POST', `/api/image-lab/notebooks/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/cancel`),
+
+  imageLabTools: () => request('GET', '/api/image-lab/tools'),
+  imageLabAssets: (limit = 500) => request('GET', `/api/image-lab/assets?limit=${limit}`),
 };
 
 /** Reconnecting WebSocket. Device work involves unplugging things; drops are normal. */
