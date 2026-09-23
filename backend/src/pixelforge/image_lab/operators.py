@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -545,9 +546,23 @@ FACE_DETECT_PARAMS = (
 def face_detect(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
     area = _selected(image, roi)
     gray = cv2.cvtColor(area, cv2.COLOR_RGB2GRAY)
-    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    if detector.empty():
-        raise ValueError("未能加载内置人脸检测模型 (haarcascade_frontalface_default.xml)")
+    # MHXY pointed at a hardcoded project-relative XML path (path_config.FACE_DETECT_TEST).
+    # cv2.data.haarcascades ships the same model with the desktop opencv-python wheel,
+    # with no extra file for the person to keep track of -- but a stripped-down build
+    # (some headless wheels) can omit the classifier or its data entirely, so this is
+    # treated as an environment gap (-> pending_adapter via ValueError) rather than a bug.
+    cascade_dir = getattr(getattr(cv2, "data", None), "haarcascades", None)
+    detector = None
+    if cascade_dir:
+        cascade_path = os.path.join(cascade_dir, "haarcascade_frontalface_default.xml")
+        if hasattr(cv2, "CascadeClassifier") and os.path.isfile(cascade_path):
+            detector = cv2.CascadeClassifier(cascade_path)
+    if detector is None or detector.empty():
+        raise ValueError(
+            "当前 OpenCV 构建缺少人脸检测所需的 Haar 级联分类器/数据文件 "
+            "(常见于精简版 opencv-python-headless); 安装标准 opencv-python 或 "
+            "opencv-contrib-python 后该工具即可运行。"
+        )
     faces = detector.detectMultiScale(
         gray, scaleFactor=float(params["scale_factor"]), minNeighbors=int(params["min_neighbors"])
     )
@@ -589,8 +604,10 @@ def line_detect(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValu
     preview = area.copy()
     segments: list[dict[str, object]] = []
     if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = (int(v) for v in line[0])
+        # HoughLinesP's output shape has changed across OpenCV versions --
+        # (N, 1, 4) historically, (N, 4) on newer builds. reshape(-1, 4)
+        # normalises either into one (x1, y1, x2, y2) row per line.
+        for x1, y1, x2, y2 in lines.reshape(-1, 4).tolist():
             cv2.line(preview, (x1, y1), (x2, y2), (235, 90, 90), 2)
             segments.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
     return OpResult(
