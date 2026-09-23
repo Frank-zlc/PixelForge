@@ -33,7 +33,8 @@ def test_catalog_demo_and_local_crop(tmp_path: Path) -> None:
 
     with TestClient(build_app(settings)) as client:
         tools = client.get("/api/image-tools").json()
-        assert {tool["id"] for tool in tools if tool["availability"] == "available"} == {
+        available_ids = {tool["id"] for tool in tools if tool["availability"] == "available"}
+        assert available_ids >= {
             "crop",
             "grayscale",
             "color_mask",
@@ -43,7 +44,14 @@ def test_catalog_demo_and_local_crop(tmp_path: Path) -> None:
             "template_match",
             "match_verify",
             "ocr",
+            "text_regions",
+            "highlight_state",
+            "template_match_expand",
+            "line_detect",
         }
+        # face_detect needs an OpenCV build that still ships CascadeClassifier
+        # (dropped in OpenCV 5.x) -- available or not depending on environment,
+        # never asserted either way here.
         assert all(tool["effect_image"] for tool in tools if tool["availability"] == "available")
         assert client.get("/api/image-tools/color_mask/demo").headers["content-type"] == "image/png"
 

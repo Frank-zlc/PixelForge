@@ -6,10 +6,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+import cv2
 import numpy as np
 
-from pixelforge.geometry.mapper import Rect
-from pixelforge.vision.matching import match_template
+from pixelforge.geometry.mapper import Point, Rect
+from pixelforge.vision.matching import match_template, match_template_expanding
 from pixelforge.vision.ocr import OcrError, TesseractOcr, text_similarity
 from pixelforge.vision.tool_catalog import (
     _color_mask,
@@ -18,6 +19,7 @@ from pixelforge.vision.tool_catalog import (
     draw_boxes,
     draw_marker,
     encode_data_url,
+    find_text_blobs,
     process_image,
     similarity_ratio,
 )
@@ -389,6 +391,212 @@ def ocr(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> O
     if target:
         metrics["text_similarity"] = text_similarity(target, result.text)
     return OpResult(images={"image": preview}, regions=regions, points=points, metrics=metrics, text=result.text)
+
+
+TEXT_REGIONS_PARAMS = COLOR_PARAMS + (
+    ParamSpec("min_height", "最小文字块高度(像素)", "integer", 30, 5, 500),
+    ParamSpec("language", "识别语言", "choice", "eng", options=OCR_LANGUAGES),
+    ParamSpec("target_words", "目标文字 (可选, 用于相似度校验)", "text", ""),
+)
+
+
+@operator(
+    id="text_regions", category="文字识别", name="彩色文字区域定位",
+    description=(
+        "按颜色筛选并用形态学操作把相邻字符合并成候选文字块, 逐块运行 OCR 校验并给出坐标, "
+        "适合颜色统一的 UI 文案(公告栏金色/白色文字等)在没有固定模板时的定位。"
+    ),
+    source="MHXY 移植并优化 (dynamic_capture.get_words_xy)",
+    params=TEXT_REGIONS_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def text_regions(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    selected = _selected(image, roi)
+    legacy = _legacy_params(params)
+    blobs = find_text_blobs(selected, legacy, min_height=int(params["min_height"]))
+    engine = TesseractOcr(language=str(params["language"]))
+    target = str(params["target_words"])
+    offset_x, offset_y = (roi.x, roi.y) if roi is not None else (0, 0)
+    regions: list[dict[str, object]] = []
+    preview_boxes: list[Rect] = []
+    best_similarity = 0.0
+    for blob in blobs:
+        x, y, w, h = blob["x"], blob["y"], blob["width"], blob["height"]
+        crop = selected[y : y + h, x : x + w]
+        text = ""
+        if engine.available and crop.size:
+            try:
+                text = engine.recognize_sync(crop, psm=7).text.strip()
+            except OcrError:
+                text = ""  # a single unreadable blob should not fail the whole scan
+        entry: dict[str, object] = {
+            "x": x + offset_x, "y": y + offset_y, "width": w, "height": h,
+            "gravity_x": blob["gravity_x"] + offset_x, "gravity_y": blob["gravity_y"] + offset_y,
+            "text": text,
+        }
+        if target and text:
+            score = text_similarity(target, text)
+            entry["text_similarity"] = score
+            best_similarity = max(best_similarity, score)
+        regions.append(entry)
+        preview_boxes.append(Rect(entry["x"], entry["y"], w, h))
+    preview = draw_boxes(image, preview_boxes) if preview_boxes else image
+    metrics: dict[str, float] = {"blob_count": float(len(regions))}
+    if target:
+        metrics["best_text_similarity"] = best_similarity
+    return OpResult(images={"image": preview}, regions=tuple(regions), metrics=metrics)
+
+
+HIGHLIGHT_STATE_PARAMS = COLOR_PARAMS + (
+    ParamSpec("coverage_threshold", "点亮占比阈值", "number", 0.5, 0.0, 1.0),
+)
+
+
+@operator(
+    id="highlight_state", category="颜色分析", name="高亮状态检测",
+    description=(
+        "统计选区内目标颜色像素占比, 用于判断按钮/图标/选项是否处于点亮(高亮/选中)状态; "
+        "占比达到阈值视为已点亮。"
+    ),
+    source="MHXY 移植并优化 (click_function.get_highlight_mask)", needs_roi=True,
+    params=HIGHLIGHT_STATE_PARAMS, outputs={"image": "IMAGE_RGB8", "mask": "MASK8"},
+    acceptance_ref=ACCEPTANCE,
+)
+def highlight_state(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    area = _selected(image, roi)
+    mask = _color_mask(area, _legacy_params(params))
+    coverage = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
+    lit = coverage >= float(params["coverage_threshold"])
+    preview = cv2.bitwise_and(area, area, mask=mask)
+    return OpResult(
+        images={"image": preview, "mask": mask},
+        metrics={"coverage": coverage, "threshold": float(params["coverage_threshold"])},
+        text="点亮" if lit else "未点亮",
+        notes=(f"coverage={coverage:.3f} threshold={params['coverage_threshold']}",),
+    )
+
+
+TEMPLATE_MATCH_EXPAND_PARAMS = (
+    ParamSpec("template", "模板图 (base64 PNG)", "image", _demo_template()),
+    ParamSpec("anchor_x", "锚点 X", "integer", 89, 0, 100000),
+    ParamSpec("anchor_y", "锚点 Y", "integer", 52, 0, 100000),
+    ParamSpec("initial_radius", "初始搜索半径(像素)", "integer", 50, 1, 2000),
+    ParamSpec("radius_step", "每次扩展像素", "integer", 25, 1, 500),
+    ParamSpec("max_expansions", "最大扩展次数", "integer", 3, 0, 10),
+    ParamSpec("threshold", "匹配阈值", "number", 0.90, 0.5, 1.0),
+)
+
+
+@operator(
+    id="template_match_expand", category="元素定位", name="锚点扩展模板匹配",
+    description=(
+        "以指定锚点为中心, 在逐步扩大的搜索半径内重试模板匹配; 适合目标位置有小幅漂移"
+        "(滚动、轻微布局变化)的场景, 比固定 ROI 更省搜索量, 比全图搜索更抗干扰。"
+    ),
+    source="MHXY 移植并优化 (dynamic_capture.accurate_recognition)",
+    params=TEMPLATE_MATCH_EXPAND_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def template_match_expand(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    template = decode_data_url(str(params["template"]))
+    anchor = Point(float(params["anchor_x"]), float(params["anchor_y"]))
+    result = match_template_expanding(
+        image, template, anchor=anchor,
+        initial_radius=int(params["initial_radius"]),
+        radius_step=int(params["radius_step"]),
+        max_expansions=int(params["max_expansions"]),
+        threshold=float(params["threshold"]),
+    )
+    regions: tuple[dict[str, object], ...] = ()
+    points: tuple[dict[str, object], ...] = ()
+    preview = image
+    if result.box is not None:
+        color = (64, 200, 120) if result.found else (235, 90, 90)
+        preview = draw_marker(image, result.box, color)
+        regions = (
+            {
+                "x": result.box.x, "y": result.box.y,
+                "width": result.box.width, "height": result.box.height,
+                "matched": result.found,
+            },
+        )
+        center = result.box.center
+        points = ({"x": center.x, "y": center.y},)
+    return OpResult(
+        images={"image": preview},
+        regions=regions,
+        points=points,
+        metrics={"score": result.score, "threshold": result.threshold, "scale": result.scale},
+        text=result.explain(),
+        notes=(f"metric={result.metric}",),
+    )
+
+
+FACE_DETECT_PARAMS = (
+    ParamSpec("scale_factor", "缩放步长", "number", 1.1, 1.01, 2.0),
+    ParamSpec("min_neighbors", "最小相邻数", "integer", 3, 1, 20),
+)
+
+
+@operator(
+    id="face_detect", category="轮廓分析", name="人脸检测",
+    description="使用 OpenCV 内置 Haar 级联检测人脸区域, 用于定位人物头像/角色立绘中的面部位置。",
+    source="MHXY 移植并优化 (reserve_function.face_detect)",
+    params=FACE_DETECT_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def face_detect(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    area = _selected(image, roi)
+    gray = cv2.cvtColor(area, cv2.COLOR_RGB2GRAY)
+    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    if detector.empty():
+        raise ValueError("未能加载内置人脸检测模型 (haarcascade_frontalface_default.xml)")
+    faces = detector.detectMultiScale(
+        gray, scaleFactor=float(params["scale_factor"]), minNeighbors=int(params["min_neighbors"])
+    )
+    boxes = [Rect(int(x), int(y), int(w), int(h)) for x, y, w, h in faces]
+    preview = draw_boxes(area, boxes) if boxes else area
+    regions = tuple({"x": b.x, "y": b.y, "width": b.width, "height": b.height} for b in boxes)
+    points = tuple({"x": b.center.x, "y": b.center.y} for b in boxes)
+    return OpResult(
+        images={"image": preview}, regions=regions, points=points,
+        metrics={"face_count": float(len(boxes))},
+    )
+
+
+LINE_DETECT_PARAMS = (
+    ParamSpec("low", "Canny 低阈值", "integer", 50, 0, 255),
+    ParamSpec("high", "Canny 高阈值", "integer", 150, 0, 255),
+    ParamSpec("min_line_length", "最小线段长度", "integer", 50, 1, 2000),
+    ParamSpec("max_line_gap", "最大线段间隙", "integer", 10, 0, 200),
+)
+
+
+@operator(
+    id="line_detect", category="轮廓分析", name="直线检测",
+    description="基于 Canny 边缘与霍夫变换检测画面中的直线段, 用于定位分割线、进度条边框等结构。",
+    source="MHXY 移植并优化 (reserve_function.line_detect_possible_demo)",
+    params=LINE_DETECT_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def line_detect(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    area = _selected(image, roi)
+    low, high = int(params["low"]), int(params["high"])
+    if low >= high:
+        raise ValueError("low must be less than high")
+    gray = cv2.cvtColor(area, cv2.COLOR_RGB2GRAY)
+    edges_img = cv2.Canny(gray, low, high, apertureSize=3)
+    lines = cv2.HoughLinesP(
+        edges_img, 1, np.pi / 180, 100,
+        minLineLength=int(params["min_line_length"]), maxLineGap=int(params["max_line_gap"]),
+    )
+    preview = area.copy()
+    segments: list[dict[str, object]] = []
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = (int(v) for v in line[0])
+            cv2.line(preview, (x1, y1), (x2, y2), (235, 90, 90), 2)
+            segments.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+    return OpResult(
+        images={"image": preview}, regions=tuple(segments),
+        metrics={"line_count": float(len(segments))},
+    )
 
 
 def _selected(image: np.ndarray, roi: Rect | None) -> np.ndarray:

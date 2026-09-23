@@ -32,16 +32,6 @@ PENDING_TOOLS: tuple[tuple[str, str, str, str, str, str, str, dict[str, str | in
         {},
     ),
     (
-        "text_regions",
-        "文字识别",
-        "彩色文字区域定位",
-        "TBD",
-        "计划移植 MHXY 的颜色筛选与轮廓定位, 输出可检查的候选文字框。",
-        "planned",
-        "MHXY 候选",
-        {},
-    ),
-    (
         "batch_process",
         "批量处理",
         "目录批量处理",
@@ -175,6 +165,69 @@ def similarity_ratio(
     if template_total <= 0:
         return 0.0, intersection
     return float(np.sum(intersection)) / template_total, intersection
+
+
+def find_text_blobs(
+    image: np.ndarray,
+    params: dict[str, str],
+    *,
+    min_height: int = 30,
+    pad_x: int = 12,
+    pad_y: int = 5,
+) -> list[dict[str, int]]:
+    """MHXY 移植并优化 (``dynamic_capture.get_words_xy``): 按颜色筛选候选文字块.
+
+    The original ran a bespoke Canny+HSV pass tuned to one font color before
+    thresholding, then walked ``cv2.findContours``'s legacy 3-return-value API
+    (``cloneImage, contours, hierarchy = ...``), which current OpenCV no longer
+    returns. This reuses ``_color_mask`` -- the same HSV threshold already
+    shared by ``color_mask``/``text_enhance``/``match_verify`` -- as the single
+    color pass, and unpacks the modern 2-value ``findContours`` return.
+
+    Morphology merges nearby glyphs into word-sized blobs (dilate), trims
+    connective noise between separate words back apart (erode a thin
+    horizontal kernel), then reforms full word-height boxes (dilate again) --
+    the same three-stage idea as the original, kept because it is what makes
+    this robust to characters of uneven width rather than a fixed grid.
+
+    Returns each blob's padded, image-clamped box and its centroid, in caller
+    (post-ROI) coordinates. No OCR runs here: reading each blob's text needs an
+    OCR engine instance, which the caller (an operator, a device script) already
+    owns and configures with its own language/timeout.
+    """
+    mask = _color_mask(image, params)
+    merge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (24, 24))
+    trim_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 30))
+    separate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 1))
+    reform_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 20))
+    binary = cv2.dilate(mask, merge_kernel, iterations=1)
+    binary = cv2.erode(binary, trim_kernel, iterations=1)
+    binary = cv2.erode(binary, separate_kernel, iterations=1)
+    binary = cv2.dilate(binary, reform_kernel, iterations=1)
+
+    contours, _hierarchy = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    height, width = image.shape[:2]
+    blobs: list[dict[str, int]] = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if h <= min_height:
+            continue
+        x1, y1 = max(0, x - pad_x), max(0, y - pad_y)
+        x2, y2 = min(width, x + w + pad_x), min(height, y + h + pad_y)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        moments = cv2.moments(contour)
+        if moments["m00"]:
+            gx, gy = moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]
+        else:
+            gx, gy = (x1 + x2) / 2, (y1 + y2) / 2
+        blobs.append(
+            {
+                "x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1,
+                "gravity_x": int(round(gx)), "gravity_y": int(round(gy)),
+            }
+        )
+    return blobs
 
 
 def process_image(

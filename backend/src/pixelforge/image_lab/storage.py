@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from pixelforge.image_lab.operators import OPERATORS, OperatorSpec, manifest
+from pixelforge.vision import matching as vision_matching
 from pixelforge.vision import ocr as vision_ocr
 from pixelforge.vision import tool_catalog
 
@@ -47,11 +48,11 @@ def _source_hash(spec: OperatorSpec) -> str:
     if spec.id in tool_catalog.IMPLEMENTATIONS:
         source += inspect.getsource(tool_catalog.process_image).encode()
         source += inspect.getsource(tool_catalog.IMPLEMENTATIONS[spec.id]).encode()
-    if spec.id in {"color_mask", "text_enhance", "match_verify"}:
+    if spec.id in {"color_mask", "text_enhance", "match_verify", "highlight_state"}:
         source += inspect.getsource(tool_catalog._color_mask).encode()
-    if spec.id in {"template_match", "match_verify"}:
+    if spec.id in {"template_match", "match_verify", "template_match_expand"}:
         source += inspect.getsource(tool_catalog.decode_data_url).encode()
-    if spec.id == "template_match":
+    if spec.id in {"template_match", "template_match_expand"}:
         source += inspect.getsource(tool_catalog.draw_marker).encode()
     if spec.id == "match_verify":
         source += inspect.getsource(tool_catalog.similarity_ratio).encode()
@@ -59,6 +60,15 @@ def _source_hash(spec: OperatorSpec) -> str:
         source += inspect.getsource(tool_catalog.draw_boxes).encode()
         source += inspect.getsource(vision_ocr.TesseractOcr.recognize_sync).encode()
         source += inspect.getsource(vision_ocr.text_similarity).encode()
+    if spec.id == "text_regions":
+        source += inspect.getsource(tool_catalog.find_text_blobs).encode()
+        source += inspect.getsource(tool_catalog.draw_boxes).encode()
+        source += inspect.getsource(vision_ocr.TesseractOcr.recognize_sync).encode()
+        source += inspect.getsource(vision_ocr.text_similarity).encode()
+    if spec.id == "template_match_expand":
+        source += inspect.getsource(vision_matching.match_template_expanding).encode()
+    if spec.id in {"face_detect", "line_detect"}:
+        source += inspect.getsource(tool_catalog.draw_boxes).encode()
     return hashlib.sha256(source).hexdigest()
 
 

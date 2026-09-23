@@ -12,7 +12,9 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from pixelforge.config import Settings
+from pixelforge.image_lab.operators import OPERATORS, availability
 from pixelforge.main import build_app
+from pixelforge.vision.tool_catalog import PENDING_TOOLS
 
 
 def _png(image: np.ndarray) -> bytes:
@@ -44,12 +46,22 @@ def test_import_persists_same_name_images_and_typed_tool_output(tmp_path: Path) 
         ] == "one/a.png"
 
         tools = client.get("/api/image-lab/tools").json()
+        # face_detect's readiness depends on whether this OpenCV build still ships
+        # CascadeClassifier (dropped in OpenCV 5.x) -- derive the expected split
+        # from actual availability() rather than a hardcoded count, so this test
+        # does not flake between an environment that has it and one that doesn't.
+        ready_registered = sum(availability(spec)[0] == "ready" for spec in OPERATORS.values())
+        pending_registered = len(OPERATORS) - ready_registered
+        pending_batch = sum(1 for row in PENDING_TOOLS if row[0] == "screen_diff")
+        workflow_planned = sum(1 for row in PENDING_TOOLS if row[0] == "batch_process")
+        planned = len(PENDING_TOOLS) - pending_batch - workflow_planned
         assert tools["counts"] == {
-            "ready_algorithms": 9,
-            "pending_adapter": 1,
-            "planned_algorithms": 1,
-            "planned_workflows": 1,
+            "ready_algorithms": ready_registered,
+            "pending_adapter": pending_registered + pending_batch,
+            "planned_algorithms": planned,
+            "planned_workflows": workflow_planned,
         }
+        assert tools["counts"]["ready_algorithms"] >= 13
         mask = next(tool for tool in tools["items"] if tool["id"] == "color_mask")
         assert mask["outputs"]["mask"] == "MASK8"
         assert mask["params_schema"][0]["name"] == "color"

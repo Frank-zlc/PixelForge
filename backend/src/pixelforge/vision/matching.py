@@ -45,6 +45,7 @@ __all__ = [
     "MatchResult",
     "diff_ratio",
     "match_template",
+    "match_template_expanding",
 ]
 
 DEFAULT_THRESHOLD = 0.90
@@ -206,6 +207,58 @@ def match_template(
         metric=metric,
         scores_by_scale=tuple(per_scale),
     )
+
+
+def match_template_expanding(
+    haystack: "np.ndarray",
+    needle: "np.ndarray",
+    *,
+    anchor: Point,
+    initial_radius: int = 50,
+    radius_step: int = 25,
+    max_expansions: int = 3,
+    threshold: float = DEFAULT_THRESHOLD,
+    mask: "np.ndarray | None" = None,
+    scales: tuple[float, ...] = DEFAULT_SCALES,
+    grayscale: bool = True,
+) -> MatchResult:
+    """MHXY 移植并优化 (``dynamic_capture.accurate_recognition``): retry
+    :func:`match_template` inside a square ROI centered on ``anchor``, growing
+    the ROI by ``radius_step`` on every miss, up to ``max_expansions`` times.
+
+    Useful when a control's rough position is known (from a previous run, a
+    layout constant, or a prior match) but may have drifted a little -- after a
+    scroll, a font-size change, or a slightly different screen. A single wide
+    ROI would also work but costs more pixels to search on the common case
+    where the element has not moved; this starts narrow and only pays for a
+    wider search when the narrow one actually misses.
+
+    The original recursed once per expansion, rebuilding its call stack and
+    re-deriving the clamped ROI by hand each time. This iterates instead
+    (a fixed number of expansions never needs the stack) and reuses
+    :meth:`Rect.clamped_to` for the edge-of-image clamping that ``match_template``
+    already does for ``roi``, rather than re-implementing bounds checks here.
+    """
+    if initial_radius <= 0:
+        raise ValueError("initial_radius must be positive")
+    if max_expansions < 0:
+        raise ValueError("max_expansions must not be negative")
+
+    bounds = Size(haystack.shape[1], haystack.shape[0])
+    anchor_x, anchor_y = round(anchor.x), round(anchor.y)
+    radius = initial_radius
+    last: MatchResult | None = None
+    for _ in range(max_expansions + 1):
+        side = radius * 2
+        roi = Rect(x=anchor_x - radius, y=anchor_y - radius, width=side, height=side).clamped_to(bounds)
+        last = match_template(
+            haystack, needle, roi=roi, threshold=threshold, mask=mask, scales=scales, grayscale=grayscale
+        )
+        if last.found:
+            return last
+        radius += radius_step
+    assert last is not None  # the loop runs at least once (max_expansions >= 0)
+    return last
 
 
 def diff_ratio(first: "np.ndarray", second: "np.ndarray") -> float:

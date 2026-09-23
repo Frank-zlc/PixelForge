@@ -12,8 +12,16 @@ from pixelforge.geometry.mapper import Rect
 from pixelforge.image_lab.operators import OPERATORS, availability, run_operator
 from pixelforge.vision.tool_catalog import demo_image, encode_data_url
 
+# face_detect needs an OpenCV build that still ships CascadeClassifier and its
+# Haar cascade data; OpenCV 5.x dropped that legacy API from the Python bindings
+# entirely, so on an unpinned opencv-python-headless install (this project's
+# pyproject only requires >=4.9) it reports pending_adapter, not ready. Covered
+# on its own below by a test that exercises whichever state the environment is
+# actually in, instead of assuming "ready" like every other built-in operator.
+OPTIONAL_ADAPTER_OPERATORS = {"face_detect"}
 
-@pytest.mark.parametrize("tool_id", sorted(OPERATORS))
+
+@pytest.mark.parametrize("tool_id", sorted(set(OPERATORS) - OPTIONAL_ADAPTER_OPERATORS))
 def test_registered_operator_contract(
     tool_id: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -190,3 +198,106 @@ def test_ocr_raises_a_clean_error_when_tesseract_is_unavailable(monkeypatch: pyt
     monkeypatch.setattr(operators_module, "TesseractOcr", _Unavailable)
     with pytest.raises(ValueError, match="Tesseract"):
         run_operator("ocr", demo_image())
+
+
+def test_text_regions_finds_colored_word_blobs_and_ocrs_them() -> None:
+    image = demo_image()
+    # "PIXEL FORGE" is rendered in white on the demo image's lower banner.
+    result = run_operator(
+        "text_regions", image,
+        params={"color": "white", "s_min": 0, "v_min": 150, "min_height": 10},
+    )
+    assert result.metrics["blob_count"] >= 1
+    assert any("PIXEL" in region["text"].upper() or "FORGE" in region["text"].upper() for region in result.regions)
+    assert all({"x", "y", "width", "height", "gravity_x", "gravity_y", "text"} <= region.keys() for region in result.regions)
+    assert not np.array_equal(result.images["image"], image)  # boxes were drawn
+
+
+def test_text_regions_reports_no_blobs_for_a_color_not_present() -> None:
+    image = demo_image()
+    result = run_operator("text_regions", image, params={"color": "green"})
+    assert result.metrics["blob_count"] == 0
+    assert result.regions == ()
+    assert np.array_equal(result.images["image"], image)  # nothing drawn
+
+
+def test_text_regions_reports_similarity_against_target_words() -> None:
+    image = demo_image()
+    result = run_operator(
+        "text_regions", image,
+        params={"color": "white", "s_min": 0, "v_min": 150, "min_height": 10, "target_words": "PIXEL FORGE"},
+    )
+    assert "best_text_similarity" in result.metrics
+    assert result.metrics["best_text_similarity"] > 0.5
+
+
+def test_highlight_state_reports_color_coverage_and_a_mask() -> None:
+    image = demo_image()
+    lit = run_operator(
+        "highlight_state", image, roi=Rect(18, 20, 142, 65), params={"color": "yellow"}
+    )
+    assert lit.text == "点亮"
+    assert lit.metrics["coverage"] > 0.5
+    assert lit.images["mask"].shape == (65, 142)
+    assert set(np.unique(lit.images["mask"])).issubset({0, 255})
+
+    unlit = run_operator(
+        "highlight_state", image, roi=Rect(188, 20, 152, 65), params={"color": "yellow"}
+    )
+    assert unlit.text == "未点亮"
+    assert unlit.metrics["coverage"] < lit.metrics["coverage"]
+
+
+def test_template_match_expand_finds_a_drifted_target_by_expanding_the_search() -> None:
+    image = demo_image()
+    template = image[20:85, 18:160]  # the "START" button, centered near (89, 52)
+    params = {
+        "template": encode_data_url(template),
+        "anchor_x": 120, "anchor_y": 52,
+        "initial_radius": 10, "radius_step": 40, "max_expansions": 3,
+    }
+    result = run_operator("template_match_expand", image, params=params)
+    assert result.regions[0]["matched"] is True
+    assert result.regions[0]["x"] == 18 and result.regions[0]["y"] == 20
+
+    # Without any expansions allowed, the same narrow ROI cannot fit the
+    # template at all, so the search must report a miss rather than raising.
+    no_expand = dict(params, max_expansions=0)
+    missed = run_operator("template_match_expand", image, params=no_expand)
+    assert missed.metrics["score"] < result.metrics["score"]
+
+
+def test_line_detect_reports_detected_segments() -> None:
+    image = demo_image()
+    result = run_operator("line_detect", image)
+    assert result.metrics["line_count"] > 0
+    assert all({"x1", "y1", "x2", "y2"} == region.keys() for region in result.regions)
+    assert not np.array_equal(result.images["image"], image)  # lines were drawn
+
+
+def test_line_detect_validates_threshold_order() -> None:
+    with pytest.raises(ValueError, match="low must be less"):
+        run_operator("line_detect", demo_image(), params={"low": 200, "high": 20})
+
+
+def test_face_detect_contract_or_clean_pending_state() -> None:
+    """OpenCV 5.x removed CascadeClassifier from its Python bindings, so on an
+    unpinned install this operator legitimately downgrades to pending_adapter
+    (a clean ValueError, not a startup crash) rather than "ready". If a build
+    *does* still carry the legacy Haar cascade API, the operator must still
+    hold to the same no-mutation/reproducibility contract as every other
+    operator in test_registered_operator_contract."""
+    spec = OPERATORS["face_detect"]
+    state, reason = availability(spec)
+    if state != "ready":
+        assert state == "pending_adapter", reason
+        with pytest.raises(ValueError):
+            run_operator("face_detect", demo_image())
+        return
+    image = demo_image()
+    before = image.copy()
+    first = run_operator("face_detect", image)
+    second = run_operator("face_detect", image)
+    assert np.array_equal(image, before)
+    for port, pixels in first.images.items():
+        assert np.array_equal(pixels, second.images[port])
