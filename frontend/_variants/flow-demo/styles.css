@@ -1,0 +1,229 @@
+:root {
+  color-scheme: dark;
+  --bg: #12141a;
+  --panel: #191c24;
+  --panel-2: #1f232d;
+  --line: #2b3040;
+  --text: #e4e7ef;
+  --muted: #8b93a7;
+  --accent: #5ac8fa;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Four panes: devices, canvas, inspector, and a timeline across the bottom,
+   separated by draggable gutters. The canvas column is the only flexible one --
+   the side panels hold text that should not reflow while the video resizes.
+   The three sizes live in custom properties so layout.js can move them without
+   knowing anything about the grid. */
+.shell {
+  --col-left: 260px;
+  --col-right: 340px;
+  --row-timeline: 210px;
+  --gutter: 6px;
+  display: grid;
+  grid-template-columns: var(--col-left) var(--gutter) minmax(280px, 1fr) var(--gutter) var(--col-right);
+  grid-template-rows: minmax(0, 1fr) var(--gutter) var(--row-timeline);
+  grid-template-areas:
+    "devices  gl stage gr inspector"
+    "gb       gb gb    gb gb"
+    "timeline timeline timeline timeline timeline";
+  height: 100vh;
+  background: var(--bg);
+}
+
+/* A gutter is 6px of hit area around a 1px hairline: easy to grab, invisible
+   until you go near it. */
+.gutter { position: relative; background: var(--bg); touch-action: none; }
+.gutter::after {
+  content: ""; position: absolute; background: var(--line);
+  transition: background .12s ease, width .12s ease, height .12s ease;
+}
+.gutter--x { cursor: col-resize; }
+.gutter--x::after { top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); }
+.gutter--y { cursor: row-resize; }
+.gutter--y::after { left: 0; right: 0; top: 50%; height: 1px; transform: translateY(-50%); }
+.gutter:hover::after, .gutter.is-active::after { background: var(--accent); }
+.gutter--x:hover::after, .gutter--x.is-active::after { width: 3px; }
+.gutter--y:hover::after, .gutter--y.is-active::after { height: 3px; }
+.gutter[data-track="left"] { grid-area: gl; }
+.gutter[data-track="right"] { grid-area: gr; }
+.gutter[data-track="timeline"] { grid-area: gb; }
+
+/* While dragging, the cursor must not flicker as it crosses other elements. */
+body.is-resizing-x, body.is-resizing-x * { cursor: col-resize !important; user-select: none !important; }
+body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-select: none !important; }
+
+/* Collapsed: the head stays, the log and its gutter go. */
+.shell[data-timeline="collapsed"] { --row-timeline: auto; }
+.shell[data-timeline="collapsed"] .timeline-body { display: none; }
+.shell[data-timeline="collapsed"] .gutter[data-track="timeline"] { visibility: hidden; }
+
+.pane { background: var(--panel); overflow: auto; padding: 12px; min-width: 0; }
+.pane--devices { grid-area: devices; }
+.pane--stage { grid-area: stage; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.pane--inspector { grid-area: inspector; }
+.pane--timeline { grid-area: timeline; padding: 0; display: flex; flex-direction: column; }
+
+h1 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.tool-page-link { display: block; margin: 0 0 12px; color: var(--accent); font-size: 12px; text-decoration: none; }
+.tool-page-link:hover { text-decoration: underline; }
+h2 { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; }
+h2:first-child { margin-top: 0; }
+
+button {
+  font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.primary { background: #1d4e63; border-color: #2d7d9c; }
+button.danger { border-color: #6b2b2b; }
+input, select, textarea {
+  font: inherit; color: var(--text); background: #0f1116;
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%;
+}
+textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.path-field { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row > * { flex: 0 0 auto; }
+.grow { flex: 1 1 auto; min-width: 0; }
+
+/* device list */
+.device {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  margin-bottom: 8px; cursor: pointer; background: var(--panel-2);
+}
+.device:hover { border-color: #3d4557; }
+.device[aria-selected="true"] { border-color: var(--accent); background: #17303c; }
+.device__name { font-weight: 600; }
+.device__meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--line); color: var(--muted);
+}
+.pill--ok { color: var(--ok); border-color: #2c5b3f; }
+.pill--warn { color: var(--warn); border-color: #5c4a20; }
+.pill--bad { color: var(--bad); border-color: #5c2b2b; }
+
+/* stage */
+.toolbar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+}
+.stage-body {
+  flex: 1 1 auto; position: relative; min-height: 0; background: #07080b;
+  touch-action: none; user-select: none; overflow: hidden;
+}
+/* The frame is placed by transform alone (see viewport.js): absolute at the
+   wrap's origin, moved and scaled from that corner. Nothing here may re-centre
+   it or cap its size, or the transform would no longer describe where it is. */
+.stage-wrap { position: absolute; inset: 0; overflow: hidden; }
+#screen {
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform;
+  display: block; image-rendering: pixelated; cursor: crosshair;
+}
+/* !important because the interaction-mode handlers set an inline cursor. */
+.stage-body.pan-ready, .stage-body.pan-ready #screen { cursor: grab !important; }
+.stage-body.is-panning, .stage-body.is-panning #screen { cursor: grabbing !important; }
+#overlay { position: absolute; inset: 0; pointer-events: none; }
+.readout {
+  position: absolute; left: 10px; bottom: 10px; font-family: var(--mono); font-size: 11px;
+  background: rgba(8, 10, 14, .88); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 9px; white-space: pre; pointer-events: none;
+}
+.banner {
+  position: absolute; inset: auto 10px 10px auto; max-width: 60%;
+  background: #3a2a10; border: 1px solid #6b5220; color: #f5d99a;
+  padding: 8px 10px; border-radius: 6px; font-size: 12px;
+}
+.empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+
+/* inspector + steps */
+.kv { font-family: var(--mono); font-size: 12px; }
+.kv div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.kv span:first-child { color: var(--muted); }
+.node-list, .step-list { list-style: none; margin: 0; padding: 0; }
+.node-list li {
+  font-family: var(--mono); font-size: 11px; padding: 3px 6px; border-radius: 4px;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.node-list li:hover { background: var(--panel-2); }
+.node-list li[aria-selected="true"] { background: #17303c; }
+.step {
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px;
+  background: var(--panel-2); display: flex; gap: 8px; align-items: center;
+}
+.step[data-status="ok"] { border-color: #2c5b3f; }
+.step[data-status="failed"] { border-color: #5c2b2b; }
+.step[data-status="needs_human"] { border-color: #5c4a20; }
+.step__bp {
+  width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line);
+  cursor: pointer; flex: 0 0 auto;
+}
+.step__bp[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); }
+.step__body { min-width: 0; flex: 1 1 auto; }
+.step__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step__meta { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+/* timeline */
+.timeline-head {
+  display: flex; gap: 8px; align-items: center; padding: 6px 12px;
+  border-bottom: 1px solid var(--line); background: var(--panel-2);
+}
+.timeline-body { flex: 1 1 auto; overflow: auto; font-family: var(--mono); font-size: 11.5px; }
+.event { display: grid; grid-template-columns: 62px 104px 1fr; gap: 10px; padding: 2px 12px; }
+.event:hover { background: #1a1e27; }
+.event__t { color: var(--muted); text-align: right; }
+.event__kind { color: var(--accent); }
+.event--log .event__kind { color: var(--muted); }
+.event--network .event__kind { color: var(--warn); }
+.event--step_end .event__kind { color: var(--ok); }
+.event--run_end { border-top: 1px solid var(--line); }
+.event__msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--muted); }
+.note { color: var(--warn); font-size: 12px; margin: 6px 0; }
+
+/* adb server probe */
+.probe { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+.probe__head { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+.probe__server { margin-top: 7px; font-family: var(--mono); font-size: 11.5px; }
+.probe__server[data-active="true"] { color: var(--accent); }
+.probe__devices { color: var(--muted); padding-left: 10px; }
+.probe__verdict { margin-top: 9px; font-size: 12px; line-height: 1.55; color: var(--warn); }
+.probe__verdict code {
+  font-family: var(--mono); font-size: 11px; background: #0f1116;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  display: inline-block; margin-top: 4px; color: var(--text);
+}
+.probe__verdict--ok { color: var(--ok); }
+.interaction-mode { cursor: pointer; }
+
+/* zoom controls */
+.zoom-group { display: inline-flex; align-items: center; gap: 4px; }
+.zoom-group button { padding: 4px 9px; line-height: 1.2; }
+.zoom-level { min-width: 62px; font-family: var(--mono); font-size: 11.5px; }
+button.is-on { border-color: var(--accent); color: var(--accent); }
+.chevron {
+  padding: 0 5px; line-height: 1.2; background: none; border: none;
+  color: var(--muted); font-size: 11px;
+}
+.chevron:hover { color: var(--text); }
+.selection-help { font-size: 12px; margin: 0 0 7px; }
+.selection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.selection-grid label { color: var(--muted); font-size: 11px; }
+.selection-grid input { margin-top: 3px; padding-inline: 5px; font-family: var(--mono); }

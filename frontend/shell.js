@@ -3,6 +3,7 @@ const VIEWS = {
   image: 'tools.html',
   assets: 'assets.html',
   flow: 'notebooks.html',
+  'flow-demo': '_variants/flow-demo/device.html',
 };
 
 const STORAGE_KEY = 'pixelforge.shell.view';

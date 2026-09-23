@@ -1,0 +1,33 @@
+.notebook-main { grid-template-columns: 240px minmax(0, 1fr) 320px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.side-panel, .right-panel { align-self: start; }
+.mini-list { display: grid; gap: 6px; align-content: start; max-height: 42vh; overflow: auto; }
+.mini-list button { text-align: left; font-size: 12px; padding: 8px; }
+.mini-list .active { border-color: #64c9ef; background: #193341; }
+.step-actions { display: flex; gap: 8px; margin-top: 12px; }
+.flow { display: grid; gap: 12px; align-content: start; }
+.step-card { border: 1px solid #2b3848; background: #111823; border-radius: 10px; padding: 14px; }
+.step-card.active { border-color: #64c9ef; background: #193341; }
+.step-card.note { background: #1a1f26; }
+.step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.step-number { color: #9aaabb; font-size: 12px; min-width: 22px; }
+.step-title { flex: 1; font-weight: 600; }
+.step-kind { font-size: 11px; color: #82d9b2; border: 1px solid #356e58; border-radius: 999px; padding: 1px 7px; }
+.step-body { color: #a9b9c9; font-size: 13px; }
+.step-input { color: #75d4f5; }
+.step-params { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.step-result { margin-top: 10px; }
+.step-result img { display: block; max-width: 100%; max-height: 220px; border-radius: 6px; }
+.step-status { font-size: 12px; margin-top: 6px; }
+.step-status.completed { color: #82d9b2; }
+.step-status.failed { color: #f1a5a5; }
+.step-status.running { color: #f3cb88; }
+.inspector label { display: grid; gap: 5px; color: #a9b9c9; font-size: 12px; margin-bottom: 10px; }
+.inspector input, .inspector select, .inspector textarea { background: #101722; border: 1px solid #344357; color: #e7edf4; border-radius: 7px; padding: 8px; }
+.inspector .param-row { display: grid; gap: 5px; margin-bottom: 10px; }
+.run-item { text-align: left; }
+.run-item .run-status { font-size: 12px; }
+.run-item .run-status.completed { color: #82d9b2; }
+.run-item .run-status.failed { color: #f1a5a5; }
+.run-item .run-status.running { color: #f3cb88; }
+@media (max-width: 1100px) { .notebook-main { grid-template-columns: 1fr; } .mini-list { max-height: none; } }
