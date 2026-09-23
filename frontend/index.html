@@ -1,189 +1,25 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PixelForge</title>
-<link rel="stylesheet" href="styles.css">
-<!-- Inline so there is no /favicon.ico round trip, and no 404 in the log. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2312141a'/%3E%3Crect x='10' y='6' width='12' height='20' rx='2' fill='none' stroke='%235ac8fa' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%235ac8fa'/%3E%3C/svg%3E">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PixelForge</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2312141a'/%3E%3Crect x='10' y='6' width='12' height='20' rx='2' fill='none' stroke='%235ac8fa' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%235ac8fa'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="shell.css">
 </head>
 <body>
-<div class="shell">
-
-  <section class="pane pane--devices">
-    <h1>设备</h1>
-    <a href="tools.html" class="tool-page-link">图片工具目录 →</a>
-    <a href="assets.html" class="tool-page-link">图片素材库 →</a>
-    <div class="row" style="margin-bottom:10px">
-      <button id="refresh-devices" class="grow">刷新</button>
-      <button id="probe-adb" title="查看本机每个 adb server 各自能看到哪些设备">检测 adb</button>
-    </div>
-    <div id="device-list"></div>
-    <div id="adb-probe"></div>
-
-    <h2>无线连接</h2>
-    <p class="muted" style="font-size:12px;margin:0 0 6px">
-      手机已在本机热点上时，走无线 adb 可以绕开 USB 掉线与 USB 模式被切走的问题。
-      首次需要先用数据线执行一次「转无线」。
-    </p>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="wireless-address" placeholder="192.168.2.5:5555" class="grow">
-      <button id="wireless-connect">直接连接</button>
-    </div>
-    <div class="row" style="gap:6px">
-      <button id="wireless-tcpip" class="grow" disabled>开启 5555 并自动连接</button>
-    </div>
-    <div id="wireless-result" class="kv" style="margin-top:6px"></div>
-
-    <div id="health" class="kv" style="margin-top:14px"></div>
-  </section>
-
-  <div class="gutter gutter--x" data-track="left" role="separator" aria-orientation="vertical"
-       title="拖动调整宽度 · 双击复位"></div>
-
-  <section class="pane pane--stage">
-    <div class="toolbar">
-      <span id="session-state" class="pill">未连接</span>
-      <button id="connect" class="primary" disabled>获取设备</button>
-      <button id="release" disabled>释放</button>
-      <span class="grow"></span>
-      <span class="zoom-group" title="Ctrl/⌘ + 滚轮缩放 · 滚轮平移 · 空格或中键拖动 · Ctrl/⌘ 0 适应 · Ctrl/⌘ 1 实际大小">
-        <button id="zoom-out" aria-label="缩小" disabled>−</button>
-        <button id="zoom-level" class="zoom-level" title="在 100% 与适应窗口之间切换" disabled>100%</button>
-        <button id="zoom-in" aria-label="放大" disabled>+</button>
-        <button id="zoom-fit" class="is-on" disabled>适应</button>
-      </span>
-      <label class="row interaction-mode" style="gap:4px" title="单击、长按或按住拖动都会发送到手机">
-        <input type="radio" name="interaction-mode" id="mode-tap" checked style="width:auto"> 操作设备（点击 / 拖拽）
-      </label>
-      <label class="row interaction-mode" style="gap:4px">
-        <input type="radio" name="interaction-mode" id="mode-select" style="width:auto"> 框选取材
-      </label>
-      <button id="capture-screen" disabled>获取截图</button>
-      <button id="save-screen" disabled>保存原图</button>
-      <button id="copy-screen" disabled>复制原图</button>
-      <button id="key-back" disabled>返回</button>
-      <button id="key-home" disabled>主页</button>
-      <button id="diagnose" disabled>诊断黑屏</button>
-    </div>
-    <div class="stage-body">
-      <div class="stage-wrap">
-        <canvas id="screen" width="1080" height="2400"></canvas>
-      </div>
-      <canvas id="overlay"></canvas>
-      <div id="readout" class="readout" hidden></div>
-      <div id="stage-banner" class="banner" hidden></div>
-      <div id="stage-empty" class="empty">选择一台设备并点击「获取设备」</div>
-    </div>
-  </section>
-
-  <div class="gutter gutter--x" data-track="right" role="separator" aria-orientation="vertical"
-       title="拖动调整宽度 · 双击复位"></div>
-
-  <section class="pane pane--inspector">
-    <h2>坐标 / 控件</h2>
-    <div id="point-info" class="kv"><div class="muted">在画面上移动或点击</div></div>
-
-    <h2>取材</h2>
-    <div id="selection-help" class="muted selection-help">
-      选择“框选取材”后在画面上拖动；单击会建立一个可调的小框。
-    </div>
-    <div class="selection-grid" aria-label="设备像素框选参数">
-      <label>X<input id="selection-x" type="number" min="0" step="1" disabled></label>
-      <label>Y<input id="selection-y" type="number" min="0" step="1" disabled></label>
-      <label>宽<input id="selection-width" type="number" min="1" step="1" disabled></label>
-      <label>高<input id="selection-height" type="number" min="1" step="1" disabled></label>
-    </div>
-    <div class="row" style="gap:6px;margin:6px 0 8px">
-      <span class="pill grow" id="selection-space">设备像素：未框选</span>
-      <button id="apply-selection" disabled>应用参数</button>
-      <button id="clear-selection" disabled>清除</button>
-    </div>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="save-path" class="grow path-field" readonly placeholder="正在读取保存目录…" title="实际保存目录">
-      <button id="choose-save-directory">选择目录</button>
-      <button id="reset-save-directory" disabled>默认</button>
-    </div>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="template-name" placeholder="文件名（可留空，自动生成）" class="grow">
-      <button id="save-template" disabled>保存区域 PNG</button>
-    </div>
-    <div id="template-result" class="kv"></div>
-
-    <h2>文字输入</h2>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <input id="device-text" placeholder="输入要发送到手机的文字" class="grow" disabled>
-      <button id="send-text" disabled>发送</button>
-    </div>
-    <div id="text-help" class="muted" style="font-size:12px">
-      实时控制支持 UTF-8；ADB 降级模式仅支持安全 ASCII 文本。
-    </div>
-
-    <h2>监听</h2>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <button id="start-listeners" class="grow" disabled>启动日志监听</button>
-      <button id="stop-listeners" disabled>停止</button>
-    </div>
-    <div id="listener-help" class="muted" style="font-size:12px;margin-bottom:6px">
-      获取设备后可启动 logcat，默认显示警告、错误和崩溃；选择项目后使用项目配置。
-    </div>
-    <div id="listener-status" class="kv">
-      <div class="muted">获取设备后可启动 logcat 监听</div>
-    </div>
-
-    <h2>控件树</h2>
-    <div class="row" style="margin-bottom:6px">
-      <button id="load-hierarchy" disabled class="grow">读取控件树</button>
-    </div>
-    <ul id="node-list" class="node-list"></ul>
-
-    <h2>项目 / 脚本</h2>
-    <div class="row" style="gap:6px;margin-bottom:6px">
-      <select id="project-select" class="grow"></select>
-      <button id="new-project">新建</button>
-    </div>
-    <div class="row" style="gap:6px;margin-bottom:8px">
-      <select id="script-select" class="grow"></select>
-      <button id="new-script">新建</button>
-    </div>
-    <div id="script-help" class="muted" style="font-size:12px;margin-bottom:6px"></div>
-    <ul id="step-list" class="step-list"></ul>
-    <div class="row" style="gap:6px;margin-top:6px">
-      <button id="add-tap-step" disabled class="grow">把当前点加为 tap 步骤</button>
-    </div>
-    <div class="row" style="gap:6px;margin-top:6px">
-      <button id="run-script" disabled>运行</button>
-      <button id="pause-run" disabled>暂停</button>
-      <button id="resume-run" disabled>继续</button>
-      <button id="stop-run" disabled>停止</button>
-    </div>
-    <div class="row" style="gap:6px;margin-top:6px">
-      <select id="exporter-select" class="grow"></select>
-      <button id="export-script">导出</button>
-    </div>
-    <div id="export-result" class="kv"></div>
-  </section>
-
-  <div class="gutter gutter--y" data-track="timeline" role="separator" aria-orientation="horizontal"
-       title="拖动调整高度 · 双击复位"></div>
-
-  <section class="pane pane--timeline">
-    <div class="timeline-head">
-      <button id="toggle-timeline" class="chevron" aria-expanded="true" aria-controls="timeline"
-              title="折叠时间线">▾</button>
-      <strong>时间线</strong>
-      <span id="run-state" class="pill">无运行</span>
-      <span class="grow"></span>
-      <label class="row" style="gap:4px">
-        <input type="checkbox" id="follow-timeline" checked style="width:auto"> 自动滚动
-      </label>
-      <button id="clear-timeline">清空</button>
-    </div>
-    <div id="timeline" class="timeline-body"></div>
-  </section>
-
-</div>
-<script type="module" src="app.js"></script>
+  <div class="shell-root">
+    <nav class="activity-bar" aria-label="视图切换">
+      <button type="button" class="activity-icon" data-view="device" aria-label="设备" title="设备">📱</button>
+      <button type="button" class="activity-icon" data-view="image" aria-label="图片处理" title="图片处理">🖼</button>
+      <button type="button" class="activity-icon" data-view="assets" aria-label="资源" title="资源">🗂</button>
+      <button type="button" class="activity-icon" data-view="flow" aria-label="实验本" title="实验本（规划中）">🧪</button>
+      <div class="activity-spacer"></div>
+    </nav>
+    <main class="shell-main">
+      <iframe id="view-frame" class="view-frame" title="PixelForge"></iframe>
+    </main>
+  </div>
+  <script type="module" src="shell.js"></script>
 </body>
 </html>

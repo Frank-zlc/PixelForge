@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>实验本详情 · PixelForge</title>
+  <link rel="stylesheet" href="tools.css">
+  <link rel="stylesheet" href="notebooks.css">
+  <link rel="stylesheet" href="notebook.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <nav><a href="device.html">设备工作台</a> · <a href="tools.html">功能目录</a> · <a href="assets.html">图片素材库</a> · <a href="notebooks.html">实验本</a></nav>
+      <h1 id="nb-title">实验本</h1>
+      <p id="nb-meta" class="hint">正在读取…</p>
+    </div>
+    <div class="topbar-actions">
+      <span id="save-status" class="counts">未保存</span>
+      <button id="save-notebook" type="button" class="primary">保存</button>
+      <button id="run-all" type="button">运行全部</button>
+      <button id="stop-run" type="button" hidden>停止</button>
+    </div>
+  </header>
+  <main class="notebook-main">
+    <section class="panel side-panel">
+      <div class="section-head"><h2>素材</h2><a class="button" href="assets.html">导入</a></div>
+      <div id="asset-list" class="mini-list"></div>
+      <div class="section-head" style="margin-top:18px"><h2>步骤</h2></div>
+      <div id="step-list" class="mini-list"></div>
+      <div class="step-actions">
+        <button id="add-tool" type="button">+ 工具</button>
+        <button id="add-note" type="button">+ 说明</button>
+      </div>
+    </section>
+    <section class="panel center-panel">
+      <div class="section-head"><h2>流程</h2><span id="run-status" class="counts"></span></div>
+      <div id="flow" class="flow"></div>
+    </section>
+    <section class="panel right-panel">
+      <div class="section-head"><h2>当前步骤</h2></div>
+      <div id="step-inspector"></div>
+      <div class="section-head" style="margin-top:18px"><h2>运行历史</h2></div>
+      <div id="run-history" class="mini-list"></div>
+    </section>
+  </main>
+  <script type="module" src="notebook.js"></script>
+</body>
+</html>
