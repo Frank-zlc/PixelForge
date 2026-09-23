@@ -45,9 +45,9 @@ def test_import_persists_same_name_images_and_typed_tool_output(tmp_path: Path) 
 
         tools = client.get("/api/image-lab/tools").json()
         assert tools["counts"] == {
-            "ready_algorithms": 6,
-            "pending_adapter": 3,
-            "planned_algorithms": 2,
+            "ready_algorithms": 8,
+            "pending_adapter": 2,
+            "planned_algorithms": 1,
             "planned_workflows": 1,
         }
         mask = next(tool for tool in tools["items"] if tool["id"] == "color_mask")

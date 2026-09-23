@@ -40,6 +40,8 @@ def test_catalog_demo_and_local_crop(tmp_path: Path) -> None:
             "edges",
             "threshold",
             "text_enhance",
+            "template_match",
+            "match_verify",
         }
         assert all(tool["effect_image"] for tool in tools if tool["availability"] == "available")
         assert client.get("/api/image-tools/color_mask/demo").headers["content-type"] == "image/png"

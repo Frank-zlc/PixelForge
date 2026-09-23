@@ -10,7 +10,7 @@ import pytest
 
 from pixelforge.geometry.mapper import Rect
 from pixelforge.image_lab.operators import OPERATORS, availability, run_operator
-from pixelforge.vision.tool_catalog import demo_image
+from pixelforge.vision.tool_catalog import demo_image, encode_data_url
 
 
 @pytest.mark.parametrize("tool_id", sorted(OPERATORS))
@@ -82,3 +82,72 @@ def test_operator_validates_params_and_roi() -> None:
         run_operator("crop", image)
     with pytest.raises(ValueError, match="inside"):
         run_operator("crop", image, roi=Rect(355, 190, 20, 20))
+
+
+def test_template_match_finds_the_real_template_and_scores_it() -> None:
+    image = demo_image()
+    template = image[20:85, 18:160]  # the "START" button, verbatim
+    result = run_operator(
+        "template_match", image, params={"template": encode_data_url(template), "threshold": 0.9}
+    )
+    assert result.regions[0]["matched"] is True
+    assert result.regions[0]["x"] == 18 and result.regions[0]["y"] == 20
+    assert result.metrics["score"] >= 0.9
+    assert not np.array_equal(result.images["image"], image)  # marker was drawn
+
+
+def test_template_match_reports_a_miss_without_raising() -> None:
+    image = demo_image()
+    unrelated = np.zeros((30, 30, 3), np.uint8)
+    cv2.rectangle(unrelated, (5, 5), (25, 25), (10, 200, 10), -1)
+    cv2.circle(unrelated, (15, 15), 5, (200, 10, 10), -1)  # has structure, matches nowhere in demo_image
+    result = run_operator(
+        "template_match", image, params={"template": encode_data_url(unrelated), "threshold": 0.9}
+    )
+    assert result.regions[0]["matched"] is False
+    assert result.metrics["score"] < 0.9
+
+
+def test_template_match_rejects_a_bad_template_param() -> None:
+    image = demo_image()
+    with pytest.raises(ValueError, match="base64"):
+        run_operator("template_match", image, params={"template": "not-base64!!"})
+
+
+def test_match_verify_scores_similarity_against_its_own_roi() -> None:
+    image = demo_image()
+    roi = Rect(18, 20, 142, 65)
+    template = image[20:85, 18:160]
+
+    matching = run_operator(
+        "match_verify", image, roi=roi,
+        params={"template": encode_data_url(template), "mode": "edge", "similarity": 0.5},
+    )
+    assert matching.text == "相似"
+    assert matching.metrics["similarity"] > 0.9
+
+    unrelated = np.zeros((65, 142, 3), np.uint8)
+    mismatched = run_operator(
+        "match_verify", image, roi=roi,
+        params={"template": encode_data_url(unrelated), "mode": "edge", "similarity": 0.5},
+    )
+    assert mismatched.text == "不相似"
+    assert mismatched.metrics["similarity"] < matching.metrics["similarity"]
+
+
+def test_match_verify_color_mode_uses_the_color_param() -> None:
+    image = np.zeros((40, 40, 3), np.uint8)
+    image[:, :20] = (250, 220, 20)  # yellow half
+    image[:, 20:] = (0, 0, 255)  # blue half
+    roi = Rect(0, 0, 20, 40)
+    template = image[:, :20]
+
+    yellow = run_operator(
+        "match_verify", image, roi=roi,
+        params={"template": encode_data_url(template), "mode": "color", "color": "yellow"},
+    )
+    blue = run_operator(
+        "match_verify", image, roi=roi,
+        params={"template": encode_data_url(template), "mode": "color", "color": "blue"},
+    )
+    assert yellow.metrics["similarity"] > blue.metrics["similarity"]

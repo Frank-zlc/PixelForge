@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import sqlite3
 from contextlib import closing
@@ -19,16 +21,6 @@ if TYPE_CHECKING:
 # Only pending entries live here. Runnable metadata is projected from the
 # decorated code registry in image_lab/operators.py.
 PENDING_TOOLS: tuple[tuple[str, str, str, str, str, str, str, dict[str, str | int]], ...] = (
-    (
-        "template_match",
-        "元素定位",
-        "多尺度模板匹配",
-        "match_template",
-        "设备脚本中已有 ROI、多尺度与掩码匹配; 图片工作台尚未接入模板选择。",
-        "device_only",
-        "PixelForge",
-        {},
-    ),
     (
         "ocr",
         "文字识别",
@@ -55,16 +47,6 @@ PENDING_TOOLS: tuple[tuple[str, str, str, str, str, str, str, dict[str, str | in
         "彩色文字区域定位",
         "TBD",
         "计划移植 MHXY 的颜色筛选与轮廓定位, 输出可检查的候选文字框。",
-        "planned",
-        "MHXY 候选",
-        {},
-    ),
-    (
-        "match_verify",
-        "元素定位",
-        "模板二次校验",
-        "TBD",
-        "计划为模板匹配添加边缘和颜色二次校验及分数预览。",
         "planned",
         "MHXY 候选",
         {},
@@ -134,6 +116,64 @@ def _color_mask(image: np.ndarray, params: dict[str, str]) -> np.ndarray:
         return cv2.bitwise_or(first, second)
     hue_low, hue_high = COLOR_RANGES[color]
     return cv2.inRange(hsv, np.array((hue_low, saturation, value)), np.array((hue_high, 255, 255)))
+
+
+def decode_data_url(value: str) -> np.ndarray:
+    """Decode a base64 PNG/JPEG (optionally as a ``data:...;base64,`` URL) into RGB."""
+    if not value:
+        raise ValueError("template image is required")
+    raw_b64 = value.split(",", 1)[1] if value.startswith("data:") else value
+    try:
+        raw = base64.b64decode(raw_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("template image must be valid base64") from exc
+    decoded = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError("template image could not be decoded")
+    return cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
+
+
+def encode_data_url(image: np.ndarray) -> str:
+    """Encode an RGB image as a ``data:image/png;base64,...`` string."""
+    bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR) if image.ndim == 3 else image
+    ok, encoded = cv2.imencode(".png", bgr)
+    if not ok:
+        raise ValueError("could not encode image")
+    return "data:image/png;base64," + base64.b64encode(encoded).decode("ascii")
+
+
+def draw_marker(image: np.ndarray, box: Rect, color: tuple[int, int, int] = (64, 200, 120)) -> np.ndarray:
+    """Copy of ``image`` with a rectangle drawn around ``box``. Never mutates the input."""
+    marked = image.copy()
+    cv2.rectangle(marked, (box.x, box.y), (box.right, box.bottom), color, 2)
+    return marked
+
+
+def similarity_ratio(
+    area: np.ndarray, template: np.ndarray, *, mode: str, color_params: dict[str, str]
+) -> tuple[float, np.ndarray]:
+    """MHXY 移植 (``template_similarity_check``): 颜色掩码或边缘轮廓的交集比例.
+
+    ``mode == "color"`` masks both images by ``color_params`` (see ``_color_mask``);
+    otherwise both are compared by their Canny edges. Either way the ratio is
+    intersection-pixels / template-mask-pixels, so it answers "how much of the
+    template's signature shows up in this region" rather than raw pixel diff.
+    """
+    if mode == "color":
+        area_mask = _color_mask(area, color_params)
+        tem_mask = _color_mask(template, color_params)
+    else:
+        area_mask = cv2.Canny(cv2.cvtColor(area, cv2.COLOR_RGB2GRAY), 50, 150)
+        tem_mask = cv2.Canny(cv2.cvtColor(template, cv2.COLOR_RGB2GRAY), 50, 150)
+    if area_mask.shape != tem_mask.shape:
+        area_mask = cv2.resize(
+            area_mask, (tem_mask.shape[1], tem_mask.shape[0]), interpolation=cv2.INTER_NEAREST
+        )
+    intersection = cv2.bitwise_and(area_mask, tem_mask, mask=tem_mask)
+    template_total = float(np.sum(tem_mask))
+    if template_total <= 0:
+        return 0.0, intersection
+    return float(np.sum(intersection)) / template_total, intersection
 
 
 def process_image(

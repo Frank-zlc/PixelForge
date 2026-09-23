@@ -34,12 +34,26 @@ def _json(value: object) -> str:
 
 
 def _source_hash(spec: OperatorSpec) -> str:
+    """Hash the handler plus whichever tool_catalog helpers it actually calls.
+
+    Most operators dispatch through the legacy ``process_image``/``IMPLEMENTATIONS``
+    table; a few (template_match, match_verify) call named tool_catalog helpers
+    directly instead. Either way, a version bump is required exactly when the code
+    a spec actually runs changes -- not one fixed list for every operator.
+    """
     source = inspect.getsource(spec.handler).encode()
-    source += inspect.getsource(tool_catalog.process_image).encode()
-    source += inspect.getsource(tool_catalog.IMPLEMENTATIONS[spec.id]).encode()
-    if spec.id in {"color_mask", "text_enhance"}:
-        source += inspect.getsource(tool_catalog._color_mask).encode()
     source += inspect.getsource(tool_catalog.demo_image).encode()
+    if spec.id in tool_catalog.IMPLEMENTATIONS:
+        source += inspect.getsource(tool_catalog.process_image).encode()
+        source += inspect.getsource(tool_catalog.IMPLEMENTATIONS[spec.id]).encode()
+    if spec.id in {"color_mask", "text_enhance", "match_verify"}:
+        source += inspect.getsource(tool_catalog._color_mask).encode()
+    if spec.id in {"template_match", "match_verify"}:
+        source += inspect.getsource(tool_catalog.decode_data_url).encode()
+    if spec.id == "template_match":
+        source += inspect.getsource(tool_catalog.draw_marker).encode()
+    if spec.id == "match_verify":
+        source += inspect.getsource(tool_catalog.similarity_ratio).encode()
     return hashlib.sha256(source).hexdigest()
 
 

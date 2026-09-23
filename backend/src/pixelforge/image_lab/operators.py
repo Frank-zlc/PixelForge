@@ -9,10 +9,19 @@ from typing import Literal
 import numpy as np
 
 from pixelforge.geometry.mapper import Rect
-from pixelforge.vision.tool_catalog import _color_mask, demo_image, process_image
+from pixelforge.vision.matching import match_template
+from pixelforge.vision.tool_catalog import (
+    _color_mask,
+    decode_data_url,
+    demo_image,
+    draw_marker,
+    encode_data_url,
+    process_image,
+    similarity_ratio,
+)
 
 ParamValue = str | int | float | bool
-ParamKind = Literal["choice", "integer", "number", "boolean"]
+ParamKind = Literal["choice", "integer", "number", "boolean", "image"]
 Handler = Callable[[np.ndarray, Rect | None, dict[str, ParamValue]], "OpResult"]
 
 # The one type every operator's single "image" input accepts today. A MASK8
@@ -47,6 +56,10 @@ class ParamSpec:
         }
 
     def parse(self, value: object) -> ParamValue:
+        if self.kind == "image":
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{self.name} must be a base64-encoded image")
+            return value
         if self.kind == "boolean":
             if isinstance(value, bool):
                 return value
@@ -244,6 +257,82 @@ def threshold(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]
 def text_enhance(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
     output = process_image("text_enhance", image, roi=roi, params=_legacy_params(params))
     return OpResult(images={"image": output})
+
+
+def _demo_template() -> str:
+    """A crop of ``demo_image()``'s START button -- a template that's guaranteed to be
+    findable in the demo image, so ``template_match``/``match_verify`` can self-test
+    (``availability()``) without a real device screenshot to work from."""
+    return encode_data_url(demo_image()[20:85, 18:160])
+
+
+TEMPLATE_MATCH_PARAMS = (
+    ParamSpec("template", "模板图 (base64 PNG)", "image", _demo_template()),
+    ParamSpec("threshold", "匹配阈值", "number", 0.90, 0.5, 1.0),
+)
+
+
+@operator(
+    id="template_match", category="元素定位", name="模板匹配",
+    description="多尺度模板匹配, 在图像(或选区)中定位模板位置; 复用设备脚本已有的 ROI/多尺度实现。",
+    source="PixelForge 设备脚本复用", params=TEMPLATE_MATCH_PARAMS,
+    outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def template_match_op(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    template = decode_data_url(str(params["template"]))
+    result = match_template(image, template, roi=roi, threshold=float(params["threshold"]))
+    regions: tuple[dict[str, object], ...] = ()
+    points: tuple[dict[str, object], ...] = ()
+    preview = image
+    if result.box is not None:
+        color = (64, 200, 120) if result.found else (235, 90, 90)
+        preview = draw_marker(image, result.box, color)
+        regions = (
+            {
+                "x": result.box.x, "y": result.box.y,
+                "width": result.box.width, "height": result.box.height,
+                "matched": result.found,
+            },
+        )
+        center = result.box.center
+        points = ({"x": center.x, "y": center.y},)
+    return OpResult(
+        images={"image": preview},
+        regions=regions,
+        points=points,
+        metrics={"score": result.score, "threshold": result.threshold, "scale": result.scale},
+        text=result.explain(),
+        notes=(f"metric={result.metric}",),
+    )
+
+
+MATCH_VERIFY_PARAMS = (
+    ParamSpec("template", "参考模板图 (base64 PNG)", "image", _demo_template()),
+    ParamSpec("mode", "比对方式", "choice", "edge", options=("edge", "color")),
+    ParamSpec("color", "目标颜色 (颜色模式时生效)", "choice", "yellow", options=COLORS),
+    ParamSpec("similarity", "相似度阈值", "number", 0.5, 0.0, 1.0),
+)
+
+
+@operator(
+    id="match_verify", category="元素定位", name="模板二次校验",
+    description="按颜色掩码或边缘轮廓比对选区与模板的相似度, 为模板匹配结果提供二次校验分数。",
+    source="MHXY 移植 (template_similarity_check)", needs_roi=True,
+    params=MATCH_VERIFY_PARAMS, outputs={"image": "IMAGE_RGB8"}, acceptance_ref=ACCEPTANCE,
+)
+def match_verify(image: np.ndarray, roi: Rect | None, params: dict[str, ParamValue]) -> OpResult:
+    area = _selected(image, roi)
+    template = decode_data_url(str(params["template"]))
+    mode = str(params["mode"])
+    color_params = _legacy_params({"color": params["color"], "s_min": 43, "v_min": 46})
+    ratio, _mask = similarity_ratio(area, template, mode=mode, color_params=color_params)
+    passed = ratio >= float(params["similarity"])
+    return OpResult(
+        images={"image": area},
+        metrics={"similarity": ratio},
+        text="相似" if passed else "不相似",
+        notes=(f"similarity={ratio:.3f} threshold={params['similarity']} mode={mode}",),
+    )
 
 
 def _selected(image: np.ndarray, roi: Rect | None) -> np.ndarray:
