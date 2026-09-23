@@ -309,7 +309,7 @@ def template_match_op(image: np.ndarray, roi: Rect | None, params: dict[str, Par
 MATCH_VERIFY_PARAMS = (
     ParamSpec("template", "参考模板图 (base64 PNG)", "image", _demo_template()),
     ParamSpec("mode", "比对方式", "choice", "edge", options=("edge", "color")),
-    ParamSpec("color", "目标颜色 (颜色模式时生效)", "choice", "yellow", options=COLORS),
+    ParamSpec("color", "目标颜色", "choice", "yellow", options=COLORS, when={"mode": "color"}),
     ParamSpec("similarity", "相似度阈值", "number", 0.5, 0.0, 1.0),
 )
 

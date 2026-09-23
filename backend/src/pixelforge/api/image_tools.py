@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from starlette.concurrency import run_in_threadpool
 
 from pixelforge.geometry.mapper import Rect
+from pixelforge.image_lab.operators import OPERATORS, run_operator
 from pixelforge.vision.tool_catalog import (
     IMPLEMENTATIONS,
     ImageToolCatalog,
@@ -45,7 +46,15 @@ def _decode(payload: bytes):
 
 def _process(payload: bytes, tool_id: str, roi: Rect | None, params: dict[str, str]) -> bytes:
     image = _decode(payload)
-    return _encode(process_image(tool_id, image, roi=roi, params=params))
+    if tool_id in IMPLEMENTATIONS:
+        return _encode(process_image(tool_id, image, roi=roi, params=params))
+    # Registered via image_lab.operators (OperatorSpec) rather than the legacy
+    # process_image dispatch table -- run_operator fills in any unsupplied
+    # params (an "image"-kind template param, say) from the spec's own default.
+    spec = OPERATORS[tool_id]
+    result = run_operator(tool_id, image, roi=roi, params=params)
+    primary_port = next(iter(spec.outputs))
+    return _encode(result.images[primary_port])
 
 
 @router.get("")
@@ -61,11 +70,18 @@ def demo_source() -> Response:
 @router.get("/{tool_id}/demo")
 def tool_demo(tool_id: str, request: Request) -> Response:
     tool = _catalog(request).get(tool_id)
-    if tool is None or tool["availability"] != "available" or tool_id not in IMPLEMENTATIONS:
+    available = tool_id in IMPLEMENTATIONS or tool_id in OPERATORS
+    if tool is None or tool["availability"] != "available" or not available:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "tool demonstration is unavailable")
     try:
-        roi = Rect(18, 20, 142, 65) if tool_id == "crop" else None
-        image = process_image(tool_id, demo_image(), roi=roi)
+        if tool_id in IMPLEMENTATIONS:
+            roi = Rect(18, 20, 142, 65) if tool_id == "crop" else None
+            image = process_image(tool_id, demo_image(), roi=roi)
+        else:
+            spec = OPERATORS[tool_id]
+            roi = Rect(18, 20, 142, 65) if spec.needs_roi else None
+            result = run_operator(tool_id, demo_image(), roi=roi)
+            image = result.images[next(iter(spec.outputs))]
         return Response(_encode(image), media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
@@ -83,7 +99,7 @@ async def run_tool(
     tool = _catalog(request).get(tool_id)
     if tool is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown image tool")
-    if tool["availability"] != "available" or tool_id not in IMPLEMENTATIONS:
+    if tool["availability"] != "available" or (tool_id not in IMPLEMENTATIONS and tool_id not in OPERATORS):
         raise HTTPException(status.HTTP_409_CONFLICT, "tool is not available for offline images")
     coordinates = (x, y, width, height)
     if any(value is not None for value in coordinates):

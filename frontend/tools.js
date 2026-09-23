@@ -8,7 +8,21 @@ const state = {
 
 function status(message, error = false) {
   $('workbench-status').textContent = message;
-  $('workbench-status').style.color = error ? '#f1a5a5' : '#82d9b2';
+  $('workbench-status').style.color = error ? '#f1a5a5' : '#3ddc97';
+}
+
+const CATEGORY_PALETTE = [
+  { bg: '#16241d', fg: '#3ddc97' },
+  { bg: '#182233', fg: '#7aa2ff' },
+  { bg: '#2a1f14', fg: '#f4b740' },
+  { bg: '#241830', fg: '#c792ea' },
+  { bg: '#1a2733', fg: '#5fd0e0' },
+];
+
+function categoryColors(category) {
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+  return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length];
 }
 
 function selectedTool() {
@@ -59,23 +73,32 @@ function renderCards() {
     }
     const body = document.createElement('div');
     body.className = 'card-body';
-    const title = document.createElement('div');
-    title.className = 'card-title';
-    const name = document.createElement('strong');
-    name.textContent = tool.name;
+    const meta = document.createElement('div');
+    meta.className = 'card-status-row';
+    const category = document.createElement('span');
+    category.className = 'card-category';
+    category.textContent = tool.category;
+    const colors = categoryColors(tool.category);
+    category.style.setProperty('--cat-bg', colors.bg);
+    category.style.setProperty('--cat-fg', colors.fg);
     const badge = document.createElement('span');
     badge.className = `badge ${tool.catalog_state === 'ready' ? '' : 'device'}`;
     badge.textContent = tool.catalog_state === 'ready' ? '可试用'
       : tool.catalog_state === 'pending_adapter' ? '待接入' : '规划中';
-    title.append(name, badge);
+    meta.append(category, badge);
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    const name = document.createElement('strong');
+    name.textContent = tool.name;
+    title.append(name);
     const metadata = document.createElement('div');
     metadata.className = 'card-meta';
-    metadata.textContent = `${tool.category} · ${tool.function_name}`;
+    metadata.textContent = tool.function_name;
     const description = document.createElement('div');
     description.className = 'card-description';
     description.textContent = tool.catalog_state === 'ready'
       ? tool.description : `${tool.description} ${tool.availability_reason || ''}`;
-    body.append(title, metadata, description);
+    body.append(meta, title, metadata, description);
     card.append(body);
     card.onclick = () => {
       if (tool.catalog_state === 'ready') {
@@ -100,6 +123,7 @@ function renderParameters() {
   $('tool-detail-link').href = `tool.html?id=${encodeURIComponent(tool.id)}`;
   const colors = { red: '红色', yellow: '黄色', green: '绿色', blue: '蓝色', white: '白色' };
   for (const param of tool.params_schema || []) {
+    if (param.kind === 'image') continue; // no template-picker UI yet; the operator's demo default runs instead
     const wrapper = document.createElement('label');
     wrapper.textContent = param.label;
     wrapper.dataset.when = JSON.stringify(param.when || {});
